@@ -9,7 +9,7 @@ import tech.jpco.qen.viewModel.MetaState
 class MyUserRepository private constructor(ctx: Context) : UserRepository {
     companion object : SingletonHolder<MyUserRepository, Context>(::MyUserRepository)
 
-    private val sqlInstance = SQL.getInstance(ctx)
+    private val sqlInstance = SQL.getInstance(ctx.applicationContext)
 
     override fun addTouchStream(inStream: Observable<DrawPoint>): Observable<DrawPoint> =
         inStream
