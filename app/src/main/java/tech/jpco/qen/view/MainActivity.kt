@@ -1,85 +1,91 @@
 package tech.jpco.qen.view
 
+import androidx.lifecycle.ViewModelProviders
 import android.os.Bundle
-import android.support.v7.app.AppCompatActivity
-import android.util.Log
-import android.view.MotionEvent.*
-import com.jakewharton.rxbinding3.view.touches
+import androidx.appcompat.app.AppCompatActivity
+import android.widget.Button
+import com.jakewharton.rxbinding3.view.clicks
+import com.jakewharton.rxbinding3.view.layoutChanges
 import io.reactivex.Observable
+import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.CompositeDisposable
-import tech.jpco.qen.R
-import tech.jpco.qen.viewModel.DrawPoint
-import tech.jpco.qen.viewModel.TouchEventType
+import io.reactivex.schedulers.Schedulers
 import kotlinx.android.synthetic.main.activity_main.*
+import tech.jpco.qen.R
+import tech.jpco.qen.model.SQL
+import tech.jpco.qen.viewModel.MetaEvent
+import tech.jpco.qen.viewModel.QenViewModel
+import tech.jpco.qen.viewModel.iLogger
 import java.util.concurrent.TimeUnit
 
-private const val TAG = "MainActivity"
+//Copied from https://proandroiddev.com/til-when-is-when-exhaustive-31d69f630a8b
+val <T> T.exhaustive: T
+    get() = this
 
 class MainActivity : AppCompatActivity() {
     private val cd = CompositeDisposable()
+    private val vm by lazy { ViewModelProviders.of(this).get(QenViewModel::class.java) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val output = qenPage.touches()
-            .publish { touchStream ->
-                Observable.merge(
-                    touchStream.filter {
-                        it.action == ACTION_DOWN ||
-                                it.action == ACTION_UP
-                    },
-                    touchStream.filter { it.action == ACTION_MOVE }
-                        .throttleFirst(100L, TimeUnit.MILLISECONDS)
-                )
-            }
-            .doOnNext {
-                Log.d(TAG, "raw: ${it.x}, ${it.y}")
-            }
-            //TODO normalize these coordinates
-            .map {
-                DrawPoint(
-                    it.x,
-                    it.y,
-                    when (it.action) {
-                        ACTION_DOWN -> TouchEventType.TouchDown
-                        ACTION_UP -> TouchEventType.TouchUp
-                        ACTION_MOVE -> TouchEventType.TouchMove
-                        else -> throw IllegalArgumentException(
-                            "Tried to turn a MotionEvent other than Down, Up, or " +
-                                    "Move into a DrawPoint!"
-                        )
-                    }
-                )
-            }
-//            .distinctUntilChanged { old, new ->
-//                val xdif = old.normX - new.normX
-//                val ydif = old.normY - new.normY
-//                Log.d(TAG, "$xdif, $ydif")
-//                new.type == TouchEventType.TouchMove &&
-//                        Math.abs(xdif) + Math.abs(ydif) < 10
-//            }
-            .doOnNext {
-                Log.d(TAG, "DPed: ${it.normX}, ${it.normY}, ${it.type}")
-            }
+        setupInStreams()
 
-        cd.add(
-            output
-                .scan(Pair<DrawPoint?, DrawPoint?>(null, null)) { previous, incoming ->
-                    Pair(
-                        previous.second,
-                        incoming
-                    )
-                }
-                .skip(2L)
-                .subscribe {
-                    qenPage.drawSegment(it.first, it.second)
-                }
-        )
+    }
+
+    override fun onStart() {
+        super.onStart()
+        setupOutStreams()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cd.dispose()
+    }
+
+    private fun setupOutStreams() {
+        fun <T : MetaEvent> Button.throttledMetaEvent(output: T, minMillis: Long = 500): Observable<T> =
+            this.clicks()
+                .throttleFirst(minMillis, TimeUnit.MILLISECONDS)
+                .map { output }
+
+
+        val metaStream: Observable<MetaEvent> =
+            qenPage.arStream.doOnNext { iLogger("AR", it) }
+                .publish { ARs ->
+                    Observable.merge(
+                        ARs.startWith(0f).switchMap { new_button.throttledMetaEvent(MetaEvent.NewPage(it)) },
+                        ARs.take(1).map { MetaEvent.CurrentPage(it) },
+                        cycle_button.throttledMetaEvent(MetaEvent.CyclePage, 50),
+                        clear_button.throttledMetaEvent(MetaEvent.ClearPage)
+                    )
+                }
+                .doOnNext { iLogger("MetaEvent emitted new", it) }
+                .observeOn(Schedulers.io())
+
+        val touchStream =
+            qenPage.touchStream
+                .observeOn(Schedulers.io())
+
+        vm.supply(SQL.getInstance(applicationContext), touchStream, metaStream)
+    }
+
+    private fun setupInStreams() {
+        cd.addAll(
+            vm.touchesOut
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe {
+                    qenPage.drawSegment(it)
+                },
+            vm.metaOut
+                .observeOn(AndroidSchedulers.mainThread())
+                .delaySubscription(qenPage.layoutChanges())
+                .subscribe {
+                    iLogger("Main activity received", it)
+                    if (it.content.isNotEmpty()) qenPage.drawPage(it.content, it.ratio)
+                    else qenPage.clearPage()
+                }
+        )
     }
 }

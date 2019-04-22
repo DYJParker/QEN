@@ -1,0 +1,62 @@
+import tech.jpco.qen.model.ModelDataClasses;
+
+CREATE TABLE touchHistory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  page INTEGER AS Int NOT NULL,
+  time INTEGER NOT NULL DEFAULT (STRFTIME('%s','now')),
+  x REAL AS Float NOT NULL,
+  y REAL AS Float NOT NULL,
+  type TEXT AS tech.jpco.qen.viewModel.TouchEventType NOT NULL,
+  FOREIGN KEY (page) REFERENCES pages(page)
+);
+
+CREATE TABLE pages (
+  page INTEGER AS Int PRIMARY KEY CHECK(page > 0),
+  AR REAL AS Float NOT NULL,
+  time INTEGER NOT NULL DEFAULT (STRFTIME('%s','now'))
+);
+
+addTouch:
+INSERT INTO touchHistory(x, y, type, page)
+VALUES (?, ?, ?, ?);
+
+addPage:
+INSERT INTO pages(page, AR)
+VALUES ((1+(SELECT page FROM pages ORDER BY page DESC)), ?);
+
+mostRecentTouch:
+SELECT x, y, type
+FROM touchHistory
+WHERE page = ? -- AND time > DATE('now', '-1 second')
+ORDER BY id DESC
+LIMIT 1;
+
+getPage:
+SELECT x, y, type
+FROM touchHistory
+WHERE page = ?
+ORDER BY id ASC;
+
+getAR:
+SELECT AR FROM pages WHERE page = ?;
+
+getMaxPage:
+SELECT page
+FROM pages
+ORDER BY page DESC
+LIMIT 1;
+
+clearPage:
+DELETE
+FROM touchHistory
+WHERE page = ?;
+
+getMostRecentPage:
+SELECT page
+FROM (
+    SELECT page, time FROM pages
+    UNION
+    SELECT page, time FROM touchHistory
+)
+ORDER BY time DESC
+LIMIT 1;

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list/>
+<!--<layer-list
+        xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@android:col" />
+        </shape>
+    </item>
+    <item android:bottom="2dp" android:left="1dp"
+          android:right="1dp" android:top="1dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/frame_background" />
+        </shape>
+    </item>
+    <item>
+        <bitmap android:src="@drawable/studio_asset"
+                android:tint="@color/switch_color" />
+    </item>
+</layer-list>-->
