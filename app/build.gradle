@@ -52,6 +52,8 @@ dependencies {
     androidTestImplementation 'androidx.test:core:1.1.0'
     androidTestImplementation 'androidx.test.ext:junit:1.1.0'
     androidTestImplementation 'androidx.test:runner:1.1.1'
+    androidTestImplementation 'org.skyscreamer:jsonassert:1.5.0'
+    androidTestImplementation 'com.squareup.moshi:moshi:1.8.0'
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.4.0'
 //    testImplementation 'io.mockk:mockk:1.9'
 }

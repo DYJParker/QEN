@@ -1,5 +1,6 @@
 package tech.jpco.qen.model
 
+import android.annotation.SuppressLint
 import androidx.annotation.VisibleForTesting
 import com.google.firebase.database.*
 import durdinapps.rxfirebase2.RxFirebaseDatabase
@@ -7,6 +8,7 @@ import durdinapps.rxfirebase2.exceptions.RxFirebaseDataException
 import io.reactivex.BackpressureStrategy
 import io.reactivex.Observable
 import io.reactivex.Single
+import io.reactivex.subjects.BehaviorSubject
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.iLogger
 
@@ -35,23 +37,30 @@ object Firebase : PagesRepository {
         TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
     }
 
+    @SuppressLint("CheckResult")
     override fun addPage(ar: Float) {
-        TODO()
+        maxPage.firstOrError().subscribe { currentMax ->
+            pages.push().setValue(mapOf("page" to (currentMax + 1), "AR" to ar))
+        }
     }
 
     override fun getAR(page: Int): Float {
         TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
     }
 
+    private val maxPage = BehaviorSubject.create<Int>()
+
     override fun getMaxPage(fallbackAR: Single<Float>): Observable<Int> {
         val orderedPages = pages.orderByKey().limitToLast(1)
 
-        return RxFirebaseDatabase.observeValueEvent(orderedPages, BackpressureStrategy.LATEST)
+        RxFirebaseDatabase.observeValueEvent(orderedPages, BackpressureStrategy.LATEST)
             .startWith(orderedPages.ref.getMaxPageAndSetIfAbsent(fallbackAR).toFlowable())
             .doOnNext { iLogger("FB outputted", it) }
             .map {
                 1 + (it.children.last().key?.toInt() ?: throw IllegalStateException())
-            }.toObservable()
+            }.distinctUntilChanged().toObservable().subscribe(maxPage)
+
+        return maxPage
 
     }
 
@@ -64,10 +73,9 @@ object Firebase : PagesRepository {
     @VisibleForTesting
     val getMaxPageAndSetIfAbsent: DatabaseReference.(Single<Float>) -> Single<DataSnapshot> = {
         runTransaction {
-            this.apply {
-                if (this.value == null)
-                    child("0/AR").value = it.blockingGet()
-            }
+            if (value == null)
+                child("0/AR").value = it.blockingGet()
+            this
         }.doOnSuccess {
             iLogger("Snapshot contents coming into OnSuccess()", it)
             it.children.last().run {
@@ -81,6 +89,7 @@ object Firebase : PagesRepository {
     }
 }
 
+const val ABORT = "_ABORT_"
 //Kotlinized implementation of FrangSierra's RxFirebase (https://github.com/FrangSierra/RxFirebase)
 fun DatabaseReference.runTransaction(exec: MutableData.() -> MutableData?) =
     Single.create<DataSnapshot> { output ->
@@ -90,7 +99,7 @@ fun DatabaseReference.runTransaction(exec: MutableData.() -> MutableData?) =
                 return Transaction.success(out)
             }
 
-            override fun onComplete(p0: DatabaseError?, p1: Boolean, p2: DataSnapshot?) {
+            override fun onComplete(p0: DatabaseError?, committed: Boolean, p2: DataSnapshot?) {
                 if (!output.isDisposed) {
                     if (p0 != null) output.onError(RxFirebaseDataException(p0))
                     else output.onSuccess(p2 ?: throw IllegalStateException())
