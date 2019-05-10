@@ -1,57 +1,312 @@
 package tech.jpco.qen.model
 
 import com.google.firebase.database.*
+import durdinapps.rxfirebase2.RxFirebaseDatabase
+import io.reactivex.Completable
+import io.reactivex.Observable
 import io.reactivex.Single
-import org.junit.Assert.assertTrue
+import io.reactivex.disposables.Disposable
+import io.reactivex.observers.TestObserver
+import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExpectedException
-import org.skyscreamer.jsonassert.JSONAssert
-import org.skyscreamer.jsonassert.JSONCompareMode
-import tech.jpco.qen.model.Firebase.getMaxPageAndSetIfAbsent
+import tech.jpco.qen.model.Firebase.UID
+import tech.jpco.qen.model.Firebase.arKey
+import tech.jpco.qen.model.Firebase.awaitMaxPageAndSetIfAbsent
+import tech.jpco.qen.model.Firebase.getMaxPage
+import tech.jpco.qen.model.Firebase.pages
+import tech.jpco.qen.viewModel.DrawPoint
+import tech.jpco.qen.viewModel.TouchEventType
 import tech.jpco.qen.viewModel.iLogger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.full.isSubclassOf
 
+typealias DatabaseTestAction = (DatabaseReference.(DatabaseReference.CompletionListener) -> Unit)?
+
+private const val DEBUG = true
+
 internal class FirebaseKtTest : FirebaseTestTooling() {
+    val execAction: DatabaseTestAction.(DatabaseReference) -> Unit = { ref ->
+        this?.let {
+            val latch = CountDownLatch(1)
+            ref.it(DatabaseReference.CompletionListener { databaseError, _ ->
+                assertNull("fb setvalue erred", databaseError)
+                dLogger("Latch counting down", latch)
+                latch.countDown()
+            })
+            dLogger("Latch awaiting", latch)
+            latch.await(4_500, TimeUnit.MILLISECONDS)
+        }
+    }
+
     @Test
     fun newPageTransactionTest() {
         val value = transactionTestPrototype(mockAR, null)
 
-        JSONAssert.assertEquals(value, "[{AR=$mockAR}]", JSONCompareMode.STRICT)
+        dLogger("Assertions running")
+        assertEquals("Transaction did not return the new page #", 1, value)
     }
 
     @Test
     fun exPageTransactionTest() {
-        val value = transactionTestPrototype(0f) {
-            it.getMaxPageAndSetIfAbsent(sMockAR).test().await()
-        }
+        val value = transactionTestPrototype(0f, { child("3").setValue(true, it) })
 
-        val depushed = value.replace(Regex("[$PUSH_CHARS]{20}"), PUSHED)
-        JSONAssert.assertEquals(depushed, "[{AR=$mockAR, $PUSHED=true}]", JSONCompareMode.STRICT)
+        dLogger("Assertions running")
+        assertEquals("Transaction did not return the existing page #", 3, value)
     }
 
-    private fun transactionTestPrototype(finalAR: Float, preaction: ((DatabaseReference) -> Unit)?): String {
-        val pages = firebase.child("pages")
+    @Test
+    fun transAwaitExternalPageSetTest() {
+        val value = transactionTestPrototype(0f, { setValue(false, it) }) {
+            Thread.sleep(1000)
+            child("5").setValue(true, it)
+        }
 
-        preaction?.invoke(pages)
+        dLogger("Assertions running")
+        assertEquals("Transaction did not return the supplied page #", 5, value)
+    }
 
-        val tO = pages.getMaxPageAndSetIfAbsent(Single.just(finalAR)).test()
+    @Test
+    fun transExternalPageSetTakesTooLongTest() {
+        val value = transactionTestPrototype(0f, { setValue(false, it) }) {
+            Thread.sleep(3_500)
+            child("5").setValue(true, it)
+        }
 
-        return tO.await().assertValueCount(1).values()[0].value.toString()
+        dLogger("Assertions running")
+        assertEquals("Transaction did not time out and set first page", 1, value)
+    }
+
+    @Throws(java.lang.AssertionError::class)
+    private fun transactionTestPrototype(
+        finalAR: Float,
+        preAction: DatabaseTestAction,
+        postAction: DatabaseTestAction = null
+    ): Int {
+        val pages = pages
+
+
+        preAction.execAction(pages)
+
+        val tO = pages.awaitMaxPageAndSetIfAbsent(Single.just(finalAR)).test()
+
+        postAction.execAction(pages)
+
+        return tO.await().assertValueCount(1).values()[0]
     }
 
     @Test
     fun getMaxPageFromBlankTest() {
+        dLogger("-----------")
+        maxPageTestPrototype().also { dLogger("Assertions running") }.assertValueCount(1).assertValueAt(0, 1)
+        dLogger("-----------")
+    }
+
+    @Test
+    fun getMaxPageWithExternalSetTest() {
+        maxPageTestPrototype {
+            child("7").setValue(true, it)
+        }.also { dLogger("Assertions running") }.assertValueCount(2).assertValueAt(1, 7)
+    }
+
+    @Test
+    fun getMaxPageMultipleTimes() {
+
+    }
+
+    private fun maxPageTestPrototype(postAction: DatabaseTestAction = null): TestObserver<Int> {
         val firebaseRepo = Firebase
         firebaseRepo.setTesting(true)
 
-        val tO = firebaseRepo.getMaxPage(sMockAR).doOnNext { iLogger("repo emitted", it) }.test()
-        tO.await(2, TimeUnit.SECONDS)
-        tO.assertValueCount(1).assertValueAt(0, 1)
+        val tO = firebaseRepo.getMaxPage(sMockAR).doOnError { dLogger("Error??", it) }
+            .doAfterNext {
+                dLogger("test stream emitted", it)
+                if (it == 1) postAction.execAction(pages)
+            }
+            .test().assertNoErrors()
+
+        tO.await(5, TimeUnit.SECONDS)
+        dLogger("tO's await expired")
+        return tO
     }
+
+    @Test
+    fun addSinglePageTest() {
+        addPageTestPrototype()
+    }
+
+    @Test
+    fun addMultiplePagesTest() {
+        addPageTestPrototype(3) {
+            lateinit var d: Disposable
+            val maxPageStream =
+                getMaxPage(Single.just(1000f))
+                    .doOnSubscribe { dLogger("aMPT subscribed to getMaxPage()") }
+                    .doOnNext { page ->
+                        dLogger(
+                            "addMultiplePagesTest() received from getMaxPage()",
+                            page
+                        )
+                    }.publish().apply { connect { d = it } }
+
+            val maxPageAwait: Completable.() -> Completable =
+                { mergeWith(maxPageStream.firstOrError().ignoreElement()) }
+
+            Firebase.addPage(3f)/*.blockingAwait()
+                    Completable.complete()*/
+                .maxPageAwait()
+                .andThen(/*Completable.defer{
+                    dLogger("reached defer's lambda")*/
+                    it()
+                    /*}*/
+                )
+                .maxPageAwait()
+                .blockingAwait(8, TimeUnit.SECONDS).also { dLogger("aMPT()'s await finished in time", it) }
+            d.dispose()
+        }
+    }
+
+    @Throws(AssertionError::class)
+    private fun addPageTestPrototype(
+        numberExpectedEntries: Int = 2,
+        action: (() -> Completable) -> Unit = { it().blockingAwait(2, TimeUnit.SECONDS) }
+    ) {
+        Firebase.setTesting(true)
+
+        getMaxPage(Single.just(1f)).test().awaitCount(1)
+
+        action {
+            dLogger("reached inside action's lambda")
+            Firebase.addPage(4f).also { dLogger("came back from action's lambda") }
+        }
+
+        singleValueTestRunner(pages) { snapshot ->
+            dLogger("assertions running")
+            assertEquals(
+                "Pages list has the wrong number of entries",
+                numberExpectedEntries,
+                snapshot.childrenCount.toInt()
+            )
+            assertEquals(
+                "Did not set AR correctly",
+                4f,
+                snapshot.children.last().child(arKey).value.let { (it as Number).toFloat() })
+            assertEquals(
+                "add page did not successfully increment the page number",
+                numberExpectedEntries,
+                snapshot.children.last().key!!.toInt()
+            )
+        }
+
+        /*firebase.child("pages").addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onCancelled(p0: DatabaseError) {
+                TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+            }
+
+            override fun onDataChange(p0: DataSnapshot) {
+                assertEquals(
+                    "Pages list has the wrong number of entries",
+                    numberExpectedEntries,
+                    p0.childrenCount.toInt()
+                )
+                assertEquals(
+                    "Did not set AR correctly",
+                    4f,
+                    p0.children.last().child(arKey).value.let { (it as Number).toFloat() })
+                assertEquals(
+                    "add page did not successfully increment the page number",
+                    numberExpectedEntries,
+                    p0.children.last().child(pageKey).value.let { (it as Long).toInt() }
+                )
+            }
+
+        })*/
+
+    }
+
+    @Test
+    fun singlePageTouchStreamTest() {
+        touchStreamTestPrototype {
+            addTouchStream(touchStreamTestContent.it(), Observable.just(10))
+        }.assertValuesOnly(*touchStreamTestContent.toTypedArray())
+
+        pageContributorListTestPrototype(10)
+    }
+
+    @Test
+    fun twoPageTouchStreamTest() {
+        val pages = listOf(1, 2)
+        touchStreamTestPrototype {
+            val pageStream = Observable.fromIterable(pages)
+            addTouchStream(
+                touchStreamTestContent.it().delaySubscription(pageStream.skip(1)),
+                pageStream
+            )
+        }.assertValuesOnly(*touchStreamTestContent.toTypedArray())
+
+        pages.forEach { pageContributorListTestPrototype(it) }
+    }
+
+    private val touchStreamTestContent = List(10) {
+        DrawPoint(
+            it.toFloat(),
+            it.toFloat(),
+            when (it) {
+                0 -> TouchEventType.TouchDown
+                9 -> TouchEventType.TouchUp
+                else -> TouchEventType.TouchMove
+            }
+        )
+    }
+
+    private fun touchStreamTestPrototype(content: Firebase.(List<DrawPoint>.() -> Observable<DrawPoint>) -> Observable<DrawPoint>): TestObserver<DrawPoint> {
+        Firebase.setTesting(true)
+
+        val tO = Firebase.content {
+            Observable.interval(5, TimeUnit.MILLISECONDS).map { this[it.toInt()] }.take(this.size.toLong())
+        }.test()
+
+        return tO.apply { await(2, TimeUnit.SECONDS) } //OF COURSE this is going to time out, it's an infinite stream!
+    }
+
+    private fun pageContributorListTestPrototype(page: Int) =
+        RxFirebaseDatabase.observeSingleValueEvent(Firebase.touchHistory.child(page.toString()))
+            .doOnSuccess {
+                assertEquals(
+                    "Number-only page listing didn't list my UID",
+                    true,
+                    it.hasChild(UID)
+                )
+            }.test().await().assertValueCount(1)
+
+    @Test
+    fun getPagesARTest() {
+        Firebase.setTesting(true)
+        val maxPageStream =
+            Firebase.getMaxPage(Single.just(0.25f)).log("maxPageStream").share()
+                .apply { test().awaitCount(1).assertOf { dLogger("maxPageStream fulfilled its await") } }
+        dLogger("ramping up to concat")
+        Completable.concat(List(7) {
+            dLogger("iterated", it)
+            val ar = (it + 2) / 4f
+            Firebase.addPage(ar).doOnComplete { dLogger("${it}th page added") }
+                .ambWith(maxPageStream.firstOrError().doOnSuccess { max ->
+                    dLogger(
+                        "submitted",
+                        ar to max
+                    )
+                }.ignoreElement())
+        }).blockingAwait(10, TimeUnit.SECONDS).also { dLogger("blocking await returned in time", it) }
+
+        singleValueTestRunner(Firebase.pages.also { dLogger("", it.path) }.orderByChild(arKey).equalTo(1.25)) {
+            assertEquals("Did not return the right page", 5, it.children.first().key!!.toInt())
+        }
+    }
+
+
 }
 
 open class FirebaseTestTooling {
@@ -73,6 +328,22 @@ open class FirebaseTestTooling {
         const val A_SINGLE = "a single"
         const val PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
         const val PUSHED = "_pushed_"
+    }
+
+    protected fun <T> Observable<T>.log(name: String): Observable<T> =
+        doOnComplete { dLogger("$name completed") }
+            .doOnDispose { dLogger("$name got disposed") }
+            .doOnEach { dLogger("$name emitted", it.value) }
+            .doOnSubscribe { dLogger("$name was subscribed") }
+
+    protected fun dLogger(output: String, obj: Any? = Unit) = if (DEBUG) this.iLogger(output, obj) else Unit
+
+    protected val singleValueTestRunner: (Query, (DataSnapshot) -> Unit) -> Unit = { ref, test ->
+        RxFirebaseDatabase.observeSingleValueEvent(ref).test().apply {
+            assertTrue("SUT timed out!", await(10, TimeUnit.SECONDS))
+        }.assertNoErrors().assertValueCount(1).values()[0].also(
+            test
+        )
     }
 
     protected fun messageFormat(expect: Any?, found: Any?): String = "Expected $expect, found $found"
@@ -101,8 +372,9 @@ open class FirebaseTestTooling {
     @Before
     fun setup() {
         val setupLatch = CountDownLatch(1)
-        firebase.removeValue().addOnCompleteListener {
-            iLogger("Setup executed")
+        firebase.removeValue { dbError, _ ->
+            if (dbError != null) throw IllegalStateException()
+            dLogger("Setup executed")
             setupLatch.countDown()
         }
         setupLatch.await()

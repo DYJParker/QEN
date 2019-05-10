@@ -6,6 +6,7 @@ import com.squareup.sqldelight.EnumColumnAdapter
 import com.squareup.sqldelight.android.AndroidSqliteDriver
 import com.squareup.sqldelight.runtime.rx.asObservable
 import com.squareup.sqldelight.runtime.rx.mapToOneNonNull
+import io.reactivex.Completable
 import io.reactivex.Observable
 import io.reactivex.Single
 import tech.jpco.qen.Database
@@ -38,7 +39,7 @@ class SQL private constructor(ctx: Context) : PagesRepository {
         get() = mostRecentPageQuery.executeAsOne()
 
 
-    override fun getSelectedPagePoints(page: Int): List<DrawPoint> =
+    private fun getSelectedPagePoints(page: Int): List<DrawPoint> =
         queries.getPage(page, mapper).executeAsList()
 
     override fun clearPage(page: Int) {
@@ -47,9 +48,15 @@ class SQL private constructor(ctx: Context) : PagesRepository {
             throw IllegalStateException("Page was not cleared!")
     }
 
-    override fun addPage(ar: Float) = queries.addPage(ar)
+    override fun addPage(ar: Float): Completable = queries.addPage(ar).let { return Completable.complete() }
 
-    override fun getAR(page: Int): Float = queries.getAR(page).executeAsOne()
+    override fun getPage(
+        page: Int,
+        retrieveContents: Boolean
+    ): Pair<List<DrawPoint>, Float> = Pair(
+        if (retrieveContents) getSelectedPagePoints(page) else listOf(),
+        queries.getAR(page).executeAsOne()
+    )
 
     private val mapper = { x: Float, y: Float, type: TouchEventType -> DrawPoint(x, y, type) }
 

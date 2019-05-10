@@ -18,6 +18,12 @@ fun Any.iLogger(output: String, obj: Any? = Unit) {
     Log.d(TAG, "$output$objS on ${name.substring(0, 1).toUpperCase()}${name.substring(1)}")
 }
 
+fun <T> Observable<T>.log(name: String, origin: Any): Observable<T> =
+    doOnComplete { origin.iLogger("$name completed") }
+        .doOnDispose { origin.iLogger("$name got disposed") }
+        .doOnEach { origin.iLogger("$name emitted", it.value) }
+        .doOnSubscribe { origin.iLogger("$name was subscribed") }
+
 
 class QenViewModel : ViewModel() {
     private val cd = CompositeDisposable()
@@ -72,19 +78,17 @@ class QenViewModel : ViewModel() {
             .getMaxPage(inStream.ofType(MetaEvent.CurrentPage::class.java).firstOrError().map { it.ar })
             .doOnNext { iLogger("Max page is", it) }
             .switchMap { maxPage ->
-                fun retrievePage(newCurrentPage: Int) =
-                    SelectedPage(
+                fun retrievePage(newCurrentPage: Int, retrieveActualPage: Boolean = false): SelectedPage {
+                    val (content, ratio) = repo.getPage(newCurrentPage, retrieveActualPage)
+                    return SelectedPage(
                         newCurrentPage,
                         maxPage,
-                        repo.getSelectedPagePoints(newCurrentPage),
-                        repo.getAR(newCurrentPage)
+                        content,
+                        ratio
                     )
+                }
 
-                fun Observable<MetaEvent.NewPage>.process() =
-                    subscribe {
-                        repo.addPage(it.ar)
-                    }
-
+                //NB: scan()'s default is the origin of blank page on NewPage as well as init on app open
                 fun Observable<MetaEvent>.process() =
                     scan(
                         retrievePage(repo.mostRecentPage).also { iLogger("Default emitted", it) }
@@ -101,7 +105,7 @@ class QenViewModel : ViewModel() {
                             }
                             is MetaEvent.ClearPage -> {
                                 repo.clearPage(currentPage)
-                                SelectedPage(currentPage, maxPage, listOf(), repo.getAR(currentPage))
+                                retrievePage(currentPage, false)
                             }
                             is MetaEvent.SelectPage -> {
                                 if (incomingEvent.page > maxPage) throw IllegalStateException()
