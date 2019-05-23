@@ -2,45 +2,58 @@ package tech.jpco.qen.model
 
 import com.google.firebase.database.*
 import durdinapps.rxfirebase2.RxFirebaseDatabase
+import durdinapps.rxfirebase2.RxFirebaseDatabase.observeSingleValueEvent
+import durdinapps.rxfirebase2.RxFirebaseDatabase.setValue
 import io.reactivex.Completable
+import io.reactivex.Maybe
 import io.reactivex.Observable
 import io.reactivex.Single
 import io.reactivex.disposables.Disposable
+import io.reactivex.observers.BaseTestConsumer
 import io.reactivex.observers.TestObserver
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExpectedException
+import tech.jpco.qen.iLogger
+import tech.jpco.qen.log
 import tech.jpco.qen.model.Firebase.UID
+import tech.jpco.qen.model.Firebase.addNewPage
+import tech.jpco.qen.model.Firebase.addTouchStream
 import tech.jpco.qen.model.Firebase.arKey
 import tech.jpco.qen.model.Firebase.awaitMaxPageAndSetIfAbsent
 import tech.jpco.qen.model.Firebase.getMaxPage
+import tech.jpco.qen.model.Firebase.getPage
+import tech.jpco.qen.model.Firebase.iClearPage
+import tech.jpco.qen.model.Firebase.mostRecentPage
+import tech.jpco.qen.model.Firebase.pageUID
 import tech.jpco.qen.model.Firebase.pages
+import tech.jpco.qen.model.Firebase.touchHistory
+import tech.jpco.qen.model.Firebase.uids
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
-import tech.jpco.qen.viewModel.iLogger
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.full.isSubclassOf
 
-typealias DatabaseTestAction = (DatabaseReference.(DatabaseReference.CompletionListener) -> Unit)?
+typealias DatabaseTestAction = (DatabaseReference.() -> Completable)?
 
 private const val DEBUG = true
+
+private val exec = Executors.newFixedThreadPool(1)
 
 internal class FirebaseKtTest : FirebaseTestTooling() {
     val execAction: DatabaseTestAction.(DatabaseReference) -> Unit = { ref ->
         this?.let {
-            val latch = CountDownLatch(1)
-            ref.it(DatabaseReference.CompletionListener { databaseError, _ ->
-                assertNull("fb setvalue erred", databaseError)
-                dLogger("Latch counting down", latch)
-                latch.countDown()
-            })
-            dLogger("Latch awaiting", latch)
-            latch.await(4_500, TimeUnit.MILLISECONDS)
+            ref.it().subscribe()
         }
     }
+
+    private fun DatabaseReference.rxSetValue(value: Any) =
+        RxFirebaseDatabase.setValue(this, value)
 
     @Test
     fun newPageTransactionTest() {
@@ -52,7 +65,7 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
     @Test
     fun exPageTransactionTest() {
-        val value = transactionTestPrototype(0f, { child("3").setValue(true, it) })
+        val value = transactionTestPrototype(0f, { child("3").rxSetValue(true) })
 
         dLogger("Assertions running")
         assertEquals("Transaction did not return the existing page #", 3, value)
@@ -60,9 +73,9 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
     @Test
     fun transAwaitExternalPageSetTest() {
-        val value = transactionTestPrototype(0f, { setValue(false, it) }) {
+        val value = transactionTestPrototype(0f, { rxSetValue(false) }) {
             Thread.sleep(1000)
-            child("5").setValue(true, it)
+            child("5").rxSetValue(true)
         }
 
         dLogger("Assertions running")
@@ -71,9 +84,9 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
     @Test
     fun transExternalPageSetTakesTooLongTest() {
-        val value = transactionTestPrototype(0f, { setValue(false, it) }) {
+        val value = transactionTestPrototype(0f, { rxSetValue(false) }) {
             Thread.sleep(3_500)
-            child("5").setValue(true, it)
+            child("5").rxSetValue(true)
         }
 
         dLogger("Assertions running")
@@ -91,7 +104,7 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
         preAction.execAction(pages)
 
-        val tO = pages.awaitMaxPageAndSetIfAbsent(Single.just(finalAR)).test()
+        val tO = awaitMaxPageAndSetIfAbsent(Single.just(finalAR)).test()
 
         postAction.execAction(pages)
 
@@ -108,29 +121,63 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     @Test
     fun getMaxPageWithExternalSetTest() {
         maxPageTestPrototype {
-            child("7").setValue(true, it)
+            dLogger("gMPWEST action")
+            child("7").rxSetValue(mapOf(arKey to 0)).log("gMPWEST", this@FirebaseKtTest)
         }.also { dLogger("Assertions running") }.assertValueCount(2).assertValueAt(1, 7)
     }
 
-    @Test
-    fun getMaxPageMultipleTimes() {
-
-    }
-
     private fun maxPageTestPrototype(postAction: DatabaseTestAction = null): TestObserver<Int> {
-        val firebaseRepo = Firebase
-        firebaseRepo.setTesting(true)
+        Firebase.setTesting(true)
 
-        val tO = firebaseRepo.getMaxPage(sMockAR).doOnError { dLogger("Error??", it) }
+        val tO = Firebase.getMaxPage(sMockAR).doOnError { dLogger("Error??", it) }
             .doAfterNext {
                 dLogger("test stream emitted", it)
                 if (it == 1) postAction.execAction(pages)
             }
             .test().assertNoErrors()
 
-        tO.await(5, TimeUnit.SECONDS)
+        tO.await(2, TimeUnit.SECONDS)
         dLogger("tO's await expired")
         return tO
+    }
+
+    @Test
+    fun emptyMostRecentPageTest() {
+        exception.expect(IllegalStateException::class.java)
+        mostRecentPage
+    }
+
+    @Test
+    fun mostRecentPagePerAddNewPageTest() {
+        assertEquals(
+            "addNewPage() didn't set the page to most recent",
+            999,
+            mostRecentPageTestPrototype { Firebase.addNewPage(999, 0f) }
+        )
+    }
+
+    @Test
+    fun mostRecentPagePerTouchStreamTest() {
+        assertEquals(
+            "addTouchStream() did not set the UI's new page to most recent",
+            99,
+            mostRecentPageTestPrototype {
+                addTouchStream(
+                    Observable.just(DrawPoint(0f, 0f)), Observable.just(99)
+                ).firstOrError().ignoreElement()
+            }
+        )
+    }
+
+    private fun mostRecentPageTestPrototype(postAction: (() -> Completable)): Int {
+        fun Completable.awaitAssert() = blockingAwait(5, TimeUnit.SECONDS)
+            .also { assertTrue("getMaxPage() timed out!", it) }
+
+        getMaxPage(Single.just(0f)).firstOrError().ignoreElement().awaitAssert()
+
+        postAction().awaitAssert()
+
+        return mostRecentPage
     }
 
     @Test
@@ -155,16 +202,11 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
             val maxPageAwait: Completable.() -> Completable =
                 { mergeWith(maxPageStream.firstOrError().ignoreElement()) }
 
-            Firebase.addPage(3f)/*.blockingAwait()
-                    Completable.complete()*/
+            Firebase.iAddPage(3f)
                 .maxPageAwait()
-                .andThen(/*Completable.defer{
-                    dLogger("reached defer's lambda")*/
-                    it()
-                    /*}*/
-                )
+                .andThen(it())
                 .maxPageAwait()
-                .blockingAwait(8, TimeUnit.SECONDS).also { dLogger("aMPT()'s await finished in time", it) }
+                .blockingAwait(4, TimeUnit.SECONDS).also { dLogger("aMPT()'s await finished in time", it) }
             d.dispose()
         }
     }
@@ -180,7 +222,7 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
         action {
             dLogger("reached inside action's lambda")
-            Firebase.addPage(4f).also { dLogger("came back from action's lambda") }
+            Firebase.iAddPage(4f).also { dLogger("came back from action's lambda") }
         }
 
         singleValueTestRunner(pages) { snapshot ->
@@ -200,31 +242,6 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
                 snapshot.children.last().key!!.toInt()
             )
         }
-
-        /*firebase.child("pages").addListenerForSingleValueEvent(object : ValueEventListener {
-            override fun onCancelled(p0: DatabaseError) {
-                TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
-            }
-
-            override fun onDataChange(p0: DataSnapshot) {
-                assertEquals(
-                    "Pages list has the wrong number of entries",
-                    numberExpectedEntries,
-                    p0.childrenCount.toInt()
-                )
-                assertEquals(
-                    "Did not set AR correctly",
-                    4f,
-                    p0.children.last().child(arKey).value.let { (it as Number).toFloat() })
-                assertEquals(
-                    "add page did not successfully increment the page number",
-                    numberExpectedEntries,
-                    p0.children.last().child(pageKey).value.let { (it as Long).toInt() }
-                )
-            }
-
-        })*/
-
     }
 
     @Test
@@ -240,7 +257,7 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     fun twoPageTouchStreamTest() {
         val pages = listOf(1, 2)
         touchStreamTestPrototype {
-            val pageStream = Observable.fromIterable(pages)
+            val pageStream = Observable.fromIterable(pages).share()
             addTouchStream(
                 touchStreamTestContent.it().delaySubscription(pageStream.skip(1)),
                 pageStream
@@ -273,8 +290,9 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     }
 
     private fun pageContributorListTestPrototype(page: Int) =
-        RxFirebaseDatabase.observeSingleValueEvent(Firebase.touchHistory.child(page.toString()))
+        RxFirebaseDatabase.observeSingleValueEvent(Firebase.pages.child("$page/$uids"))
             .doOnSuccess {
+                dLogger("pCLTP assert running")
                 assertEquals(
                     "Number-only page listing didn't list my UID",
                     true,
@@ -292,22 +310,217 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
         Completable.concat(List(7) {
             dLogger("iterated", it)
             val ar = (it + 2) / 4f
-            Firebase.addPage(ar).doOnComplete { dLogger("${it}th page added") }
+            Firebase.iAddPage(ar).doOnComplete { dLogger("${it}th page added") }
                 .ambWith(maxPageStream.firstOrError().doOnSuccess { max ->
-                    dLogger(
-                        "submitted",
-                        ar to max
-                    )
+                    dLogger("submitted", ar to max)
                 }.ignoreElement())
         }).blockingAwait(10, TimeUnit.SECONDS).also { dLogger("blocking await returned in time", it) }
 
-        singleValueTestRunner(Firebase.pages.also { dLogger("", it.path) }.orderByChild(arKey).equalTo(1.25)) {
+        singleValueTestRunner(Firebase.pages.orderByChild(arKey).equalTo(1.25)) {
             assertEquals("Did not return the right page", 5, it.children.first().key!!.toInt())
         }
     }
 
+    @Test
+    fun clearPageUnitTest() {
+        syntheticPageAndTouchHistoryTestPrototype { uidIndexBefore, touchListingBefore, uidIndexToIndexedUID ->
 
+            iClearPage(2).log("clearPageUnit", this).blockingAwait(2, TimeUnit.SECONDS)
+
+            val toBeRemoved = uidIndexBefore.filter { it.key == "2" }
+            val uidIndexAfter = uidIndexBefore - "2"
+            val touchListingAfter = touchListingBefore - toBeRemoved.flatMap(uidIndexToIndexedUID)
+
+            observeSingleValueEvent(touchHistory)
+                .singleEventTest<Any>()
+                .touchComparo(touchListingAfter)
+
+            observeSingleValueEvent(pages)
+                .singleEventTest<Map<String, Any>>()
+                .pagesComparo(uidIndexAfter)
+        }
+    }
+
+    private fun syntheticPageAndTouchHistoryTestPrototype(
+        test: (
+            Map<String, Map<String, Map<String, Boolean>>>,
+            Map<String, List<DrawPoint>>,
+            ((Map.Entry<String, Map<String, Map<String, Boolean>>>) -> List<String>)
+        ) ->
+        Unit
+    ) {
+        var runningOffset = 0
+        fun drawPointList(size: Int) = List(size) {
+            val xy = (it + runningOffset).toFloat()
+            DrawPoint(xy, xy)
+        }.also { runningOffset += size }
+
+
+        fun uidsWrap(inner: Map<String, Boolean>) = mapOf(uids to inner)
+        val uidIndexBefore = mapOf(
+            "1" to uidsWrap(mapOf("AAA" to true)),
+            "2" to uidsWrap(listOf("AAA", "BBB", "CCC").associateWith { true }),
+            "10" to uidsWrap(mapOf("CCC" to true))
+        )
+
+        val uidIndexToIndexedUID = { pageEntry: Map.Entry<String, Map<String, Map<String, Boolean>>> ->
+            pageEntry.value.getValue(uids).map { pageUID(pageEntry.key.toInt(), it.key) }
+        }
+
+        val touchListingBefore = uidIndexBefore.flatMap(uidIndexToIndexedUID)
+            .associateWith { drawPointList(3) }
+
+        RxFirebaseDatabase.updateChildren(pages, uidIndexBefore)
+            .andThen(
+                RxFirebaseDatabase.updateChildren(touchHistory, touchListingBefore)
+            ).blockingAwait(2, TimeUnit.SECONDS)
+
+        test(uidIndexBefore, touchListingBefore, uidIndexToIndexedUID)
+    }
+
+    @Test
+    fun clearPageInputIntegrationTest() {
+        val pages = listOf(1, 2, 3, 5)
+        val touches = List(20) { DrawPoint(it.toFloat(), it.toFloat()) }
+
+        val countMap = mapOf(2 to 5, 3 to 10, 5 to 5)
+
+
+        Observable.fromIterable(pages)
+            .concatMap {
+                var startIndex = 0
+                Observable.concat(
+                    addNewPage(it, it.toFloat()).toSingleDefault(it).toObservable(),
+                    countMap[it]?.let { currentCount ->
+                        Observable.fromIterable(touches.slice(startIndex.until(startIndex + currentCount)))
+                            .apply { startIndex += currentCount }
+                    } ?: Observable.empty()
+                )//.concatMapSingle { Single.just(it).delay(5, TimeUnit.MILLISECONDS) }
+            }
+            .log("combiStream")
+            .publish {
+                addTouchStream(
+                    it.ofType(DrawPoint::class.java),
+                    it.ofType(Int::class.javaObjectType)
+                )
+            }
+            .log("touchStreamResult")
+            .test()
+            .awaitCount(20, BaseTestConsumer.TestWaitStrategy.SLEEP_10MS)
+            .apply { await(1, TimeUnit.SECONDS) }
+            .assertValueCount(20)
+
+        iClearPage(3).blockingAwait(2, TimeUnit.SECONDS)
+
+        observeSingleValueEvent(touchHistory).singleEventTest<Any>()
+            .touchComparo(
+                {
+                    var startIndex = 0
+                    countMap.mapValues {
+                        touches.slice(startIndex.until(startIndex + it.value)).apply { startIndex += it.value }
+                    } - 3
+                }.invoke().mapKeys { pageUID(it.key) }
+            )
+
+        observeSingleValueEvent(Firebase.pages).singleEventTest<Map<String, Any>>()
+            .pagesComparo(
+                (pages - 3).associate { it.toString() to mapOf(uids to mapOf(UID to true)) }
+            )
+    }
+
+    private fun Map<String, Map<String, Any>>.pagesComparo(expectedPagesMap: Map<String, Map<String, Map<String, Boolean>>>) {
+        dLogger("clearPagesComp expected", expectedPagesMap)
+        dLogger("clearPagesComp actual", this)
+        filter { it.value[uids] != null }
+            .forEach { entry: Map.Entry<String, Map<String, Any>> ->
+                assertEquals(
+                    "Firebase did not return the correct UID index for ${entry.key}",
+                    expectedPagesMap.getValue(entry.key).getValue(uids).keys,
+                    (entry.value.getValue(uids) as Map<String, Boolean>).keys
+                )
+            }
+        assertEquals(
+            "Firebase returned too many UID indices",
+            expectedPagesMap.count { it.value[uids] != null },
+            count { it.value.apply { dLogger("", this) }[uids] != null }
+        )
+    }
+
+    //firebase actually returns Map<String, Map<String, Map<String, Any>>>
+    private fun Map<String, Any>.touchComparo(expectedTouchMap: Map<String, List<DrawPoint>>) {
+        dLogger("clearTouchComp expected", expectedTouchMap)
+        dLogger("clearTouchComp actual", this)
+
+        fun Map<String, Map<String, Any>>.toList(): List<Map<String, Any>> {
+            return map { it.value }
+        }
+
+        this.toSortedMap().mapValues { numberUidMapEntry ->
+            try {
+                (numberUidMapEntry.value as Map<String, Map<String, Any>>).toSortedMap().map { pushMapEntry ->
+                    pushMapEntry.value.mapValues { it.value }
+                }
+            } catch (e: ClassCastException) {
+                numberUidMapEntry.value as List<Map<String, Any>>
+            }
+        }.also { dLogger("reformatted touch list", it) }
+
+        assertEquals("Firebase and exemplar size did not match", expectedTouchMap.size, this.size)
+    }
+
+    @Test
+    fun getPageArAbsentFailureTest() {
+        exception.expect(IllegalStateException::class.java)
+        getPage(1, false)
+    }
+
+    @Test
+    fun getPageArTest() {
+        val expectedAR = -1.5f
+        setValue(pages.child("1/$arKey"), expectedAR).blockingAwait(2, TimeUnit.SECONDS)
+
+        val actAR = getPage(1, false).second
+
+        assertEquals("Did not return the correct AR", expectedAR, actAR)
+    }
+
+    @Test
+    fun getPageListSingleUserUnitSuccessTest() = getPageUnitTestPrototype(touchStreamTestContent, true) {
+        assertEquals("Did not return the correct DrawPoints", touchStreamTestContent, it)
+    }
+
+    @Test
+    fun getPageSingleUserListOptOutTest() = getPageUnitTestPrototype(touchStreamTestContent, false) {
+        assertEquals("Did not return an empty list", listOf<DrawPoint>(), it)
+    }
+
+    @Test
+    fun getPageSingleUserEmptyTest() = getPageUnitTestPrototype(listOf(), false) {
+        assertEquals("Did not return an empty list", listOf<DrawPoint>(), it)
+    }
+
+    private fun getPageUnitTestPrototype(
+        expPoints: List<DrawPoint>,
+        actuallyFetch: Boolean,
+        test: (List<DrawPoint>) -> Unit
+    ) {
+        setValue(pages.child("1/$arKey"), 0)
+            .mergeWith(setValue(touchHistory.child(pageUID(1)), expPoints))
+            .blockingAwait(2, TimeUnit.SECONDS)
+
+        getPage(1, actuallyFetch).first.also { test(it) }
+    }
+
+    private inline fun <reified T> Maybe<DataSnapshot>.singleEventTest() =
+        test().awaitCount(1).values()[0].value.run {
+            (this as? List<Map<String, Any>?>)
+                ?.withIndex()
+                ?.filter { it.value != null }
+                ?.associate { it.index.toString() to it.value!! }
+                ?: this
+        } as Map<String, T>
 }
+
 
 open class FirebaseTestTooling {
     companion object Constants {
@@ -330,20 +543,29 @@ open class FirebaseTestTooling {
         const val PUSHED = "_pushed_"
     }
 
+    @Rule
+    @JvmField
+    val exception: ExpectedException = ExpectedException.none()
+
     protected fun <T> Observable<T>.log(name: String): Observable<T> =
         doOnComplete { dLogger("$name completed") }
             .doOnDispose { dLogger("$name got disposed") }
-            .doOnEach { dLogger("$name emitted", it.value) }
+            .doOnNext { dLogger("$name emitted", "$it of type ${it.klass()}") }
+            .doOnError { dLogger("$name errored", it) }
             .doOnSubscribe { dLogger("$name was subscribed") }
 
     protected fun dLogger(output: String, obj: Any? = Unit) = if (DEBUG) this.iLogger(output, obj) else Unit
 
     protected val singleValueTestRunner: (Query, (DataSnapshot) -> Unit) -> Unit = { ref, test ->
-        RxFirebaseDatabase.observeSingleValueEvent(ref).test().apply {
-            assertTrue("SUT timed out!", await(10, TimeUnit.SECONDS))
-        }.assertNoErrors().assertValueCount(1).values()[0].also(
-            test
-        )
+        RxFirebaseDatabase.observeSingleValueEvent(ref)
+            .test()
+            .apply {
+                assertTrue("SUT timed out!", await(10, TimeUnit.SECONDS))
+            }
+            .assertNoErrors()
+            .assertValueCount(1)
+            .values()[0]
+            .also(test)
     }
 
     protected fun messageFormat(expect: Any?, found: Any?): String = "Expected $expect, found $found"
@@ -353,7 +575,10 @@ open class FirebaseTestTooling {
         firebaseTypeTest(comparison)
 
         if (!hasChildren()) {
-            assertTrue(messageFormat(NESTED_DATA, value.klass()), !(comparison is List<*> || comparison is Map<*, *>))
+            assertTrue(
+                messageFormat(NESTED_DATA, value.klass()),
+                !(comparison is List<*> || comparison is Map<*, *>)
+            )
             if (comparison is Double && comparison % 1 == 0.0) {
                 assertTrue(messageFormat(comparison, value), value == comparison.toLong())
             } else assertTrue(messageFormat(comparison, value), value == comparison)
@@ -371,6 +596,7 @@ open class FirebaseTestTooling {
 
     @Before
     fun setup() {
+        Firebase.setTesting(true)
         val setupLatch = CountDownLatch(1)
         firebase.removeValue { dbError, _ ->
             if (dbError != null) throw IllegalStateException()
@@ -403,12 +629,6 @@ open class FirebaseTestTooling {
 }
 
 internal class FirebaseToolingTests : FirebaseTestTooling() {
-
-
-    @Rule
-    @JvmField
-    val exception: ExpectedException = ExpectedException.none()
-
     private fun aEWP_setup(firebaseValue: Any?, reference: Any? = Unit) {
         firebaseTypeTest(firebaseValue)
 

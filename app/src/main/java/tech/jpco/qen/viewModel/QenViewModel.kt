@@ -1,29 +1,13 @@
 package tech.jpco.qen.viewModel
 
-import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import io.reactivex.Observable
 import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.subjects.BehaviorSubject
 import io.reactivex.subjects.PublishSubject
+import tech.jpco.qen.iLogger
 import tech.jpco.qen.model.PagesRepository
-
-val Any.TAG
-    get() = this::class.simpleName ?: "Anon"
-
-fun Any.iLogger(output: String, obj: Any? = Unit) {
-    val name = Thread.currentThread().name
-    val objS = if (obj == Unit) "" else ": $obj"
-    Log.d(TAG, "$output$objS on ${name.substring(0, 1).toUpperCase()}${name.substring(1)}")
-}
-
-fun <T> Observable<T>.log(name: String, origin: Any): Observable<T> =
-    doOnComplete { origin.iLogger("$name completed") }
-        .doOnDispose { origin.iLogger("$name got disposed") }
-        .doOnEach { origin.iLogger("$name emitted", it.value) }
-        .doOnSubscribe { origin.iLogger("$name was subscribed") }
-
 
 class QenViewModel : ViewModel() {
     private val cd = CompositeDisposable()

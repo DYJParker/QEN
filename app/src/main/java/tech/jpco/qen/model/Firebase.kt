@@ -8,10 +8,10 @@ import durdinapps.rxfirebase2.RxFirebaseDatabase
 import durdinapps.rxfirebase2.exceptions.RxFirebaseDataException
 import io.reactivex.*
 import io.reactivex.functions.BiFunction
+import tech.jpco.qen.iLogger
+import tech.jpco.qen.log
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
-import tech.jpco.qen.viewModel.iLogger
-import tech.jpco.qen.viewModel.log
 import java.util.concurrent.TimeUnit
 
 object Firebase : PagesRepository {
@@ -38,14 +38,20 @@ object Firebase : PagesRepository {
     @VisibleForTesting
     internal const val mostRecentKey = "most recent"
     @VisibleForTesting
+    internal const val uids = "UIDs"
+    @VisibleForTesting
     internal val pages by lazy { database.child("pages") }
     @VisibleForTesting
     internal val touchHistory by lazy { database.child("touch history") }
+
     @VisibleForTesting
-    internal val pageUID = { currentPage: Int -> "$currentPage-$UID" }
+    internal fun pageUID(currentPage: Int, uid: String = UID) = "$currentPage-$uid"
+
 
     override val mostRecentPage: Int
-        get() = TODO()
+        get() = RxFirebaseDatabase.observeSingleValueEvent(database.child(mostRecentKey)) {
+            it.getValue(Int::class.java)
+        }.doOnComplete { throw IllegalStateException("most recent page didn't exist!") }.blockingGet()!!
 
     private inline fun <reified T : Number> DataSnapshot.exporter(wantKey: String): T {
         return child(wantKey).getValue(T::class.java)!!
@@ -63,10 +69,10 @@ object Firebase : PagesRepository {
             .withLatestFrom(
                 pageStream.doOnNext {
                     database.child(mostRecentKey).setValue(it)
-                    touchHistory.child("$it/$UID").setValue(true)
+                    pages.child("$it/$uids/$UID").setValue(true)
                 },
                 BiFunction { t1: DrawPoint, t2: Int ->
-                    Pair(touchHistory.child(pageUID(t2)), t1)
+                    touchHistory.child(pageUID(t2)) to t1
                 }
             )
             .subscribe { it.first.push().setValue(it.second) }
@@ -86,38 +92,60 @@ object Firebase : PagesRepository {
     }
 
     override fun clearPage(page: Int) {
-        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+        iClearPage(page)
     }
 
     @SuppressLint("CheckResult")
-    override fun addPage(ar: Float): Completable {
+    @VisibleForTesting
+    internal fun iClearPage(page: Int): Completable {
+        fun nuke(key: String) = RxFirebaseDatabase.setValue(touchHistory.child(key), null)
+        val targetList = mutableListOf<String>()
+        iLogger("iClear firing")
+        return RxFirebaseDatabase.observeSingleValueEvent(pages.child("$page/$uids"))
+            .flatMapCompletable { userDataSnapshot ->
+                targetList.addAll(
+                    userDataSnapshot.children.map { pageUID(page, it.key!!) }
+                )
+                Completable.merge(targetList.also { iLogger("list contents", it) }.map { nuke(it) } +
+                        RxFirebaseDatabase.setValue(pages.child("$page/$uids"), null))
+            }
+    }
+
+    override fun addPage(ar: Float) {
+        iAddPage(ar).subscribe()
+    }
+
+    @VisibleForTesting
+    internal fun iAddPage(ar: Float): Completable {
         return Completable.defer {
             if (!::maxPage.isInitialized) throw IllegalStateException("getMaxPage() must be called before addPage()")
 
             val newMax = maxPage.firstOrError().blockingGet() + 1
-            database.child(mostRecentKey).setValue(newMax)
 
-            pages.addNewPage(newMax, ar).also {
+            addNewPage(newMax, ar).also {
                 iLogger("(current max page, AR being set)", (newMax - 1) to ar)
             }
         }
     }
 
+    //    @Throws(IllegalStateException::class)
     override fun getPage(
         page: Int,
         retrieveContents: Boolean
     ): Pair<List<DrawPoint>, Float> {
-        TODO()
-        /*return Single.zip(
-            RxFirebaseDatabase.observeSingleValueEvent(touchHistory.child(pageUID(page))) { pageListingSnap ->
-                pageListingSnap.children.toList().map { pointSnap ->
-                    pointSnap.toDrawPoint()
-                }
-            },
-            RxFirebaseDatabase.observeSingleValueEvent(pages.child(page.toString()).or){
-
-            }
-        )*/
+        return Single.zip(
+            (if (retrieveContents) {
+                RxFirebaseDatabase.observeSingleValueEvent(touchHistory.child(pageUID(page))) { pageListingSnap ->
+                    pageListingSnap.children.toList().map { pointSnap ->
+                        pointSnap.toDrawPoint()
+                    }
+                }.toSingle(listOf())
+            } else Single.just(listOf())),
+            RxFirebaseDatabase.observeSingleValueEvent(pages.child("$page/$arKey")) { it.value }
+                .doOnComplete { throw IllegalStateException("No recorded AR for the requested page") }
+                .flatMapSingle { Single.just((it as Number).toFloat()) },
+            BiFunction { list: List<DrawPoint>, ar: Float -> list to ar }
+        ).blockingGet()
     }
 
     private lateinit var maxPage: Observable<Int>
@@ -131,11 +159,7 @@ object Firebase : PagesRepository {
                     it.children.last().key!!.toInt()
                 }.toObservable()
 
-        maxPage = /*(
-                if (::maxPage.isInitialized) Observable.empty()
-                else*/ pages.awaitMaxPageAndSetIfAbsent(fallbackAR)
-            .toObservable()
-            /*)*/
+        maxPage = awaitMaxPageAndSetIfAbsent(fallbackAR).toObservable()
             .concatWith(ongoingMaxPageObservable)
             .distinctUntilChanged().log("maxPage (pre-replay)", this).replay(1).refCount()
 
@@ -144,18 +168,18 @@ object Firebase : PagesRepository {
     }
 
     @VisibleForTesting
-    fun setTesting(offsetTest: Boolean) {
+    internal fun setTesting(offsetTest: Boolean) {
         testing = offsetTest
         if (offsetTest != (database.key == testOffset)) throw IllegalStateException()
     }
 
     @VisibleForTesting
-    val awaitMaxPageAndSetIfAbsent: DatabaseReference.(Single<Float>) -> Single<Int> = { arSingle ->
+    internal val awaitMaxPageAndSetIfAbsent: (Single<Float>) -> Single<Int> = { arSingle ->
         val pushInitialPage = {
             addNewPage(1, arSingle.blockingGet()).toSingleDefault(1)
         }
 
-        runTransaction {
+        pages.runTransaction {
             if (value == null) {
                 value = false
                 this
@@ -166,7 +190,7 @@ object Firebase : PagesRepository {
             { returnFromTransaction ->
                 if (returnFromTransaction.hasChildren())
                     Maybe.just(returnFromTransaction.children.last().key!!.toInt())
-                else RxFirebaseDatabase.observeChildEvent(this)
+                else RxFirebaseDatabase.observeChildEvent(pages)
                     .filter {
                         it.eventType == RxFirebaseChildEvent.EventType.ADDED
                     }
@@ -181,11 +205,12 @@ object Firebase : PagesRepository {
         ).toSingle()
     }
 
-    //Takes a Ref as a receiver so that awaitMax...() is "static."
-    val addNewPage: DatabaseReference.(Int, Float) -> Completable = { pageNo, AR ->
+    @VisibleForTesting
+    internal val addNewPage: (Int, Float) -> Completable = { pageNo, AR ->
         Completable.create {
             this@Firebase.iLogger("attempting to add page $pageNo with AR $AR")
-            child(pageNo.toString()).setValue(mapOf(arKey to AR)) { dbError, _ ->
+            pages.child(pageNo.toString()).setValue(mapOf(arKey to AR)) { dbError, _ ->
+                database.child(mostRecentKey).setValue(pageNo)
                 this@Firebase.iLogger("returned from adding page $pageNo with AR $AR")
                 if (!it.isDisposed) {
                     if (dbError != null) it.onError(dbError.toException())

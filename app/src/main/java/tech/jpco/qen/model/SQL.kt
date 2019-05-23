@@ -6,13 +6,12 @@ import com.squareup.sqldelight.EnumColumnAdapter
 import com.squareup.sqldelight.android.AndroidSqliteDriver
 import com.squareup.sqldelight.runtime.rx.asObservable
 import com.squareup.sqldelight.runtime.rx.mapToOneNonNull
-import io.reactivex.Completable
 import io.reactivex.Observable
 import io.reactivex.Single
 import tech.jpco.qen.Database
+import tech.jpco.qen.iLogger
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
-import tech.jpco.qen.viewModel.iLogger
 
 class SQL private constructor(ctx: Context) : PagesRepository {
     companion object : SingletonHolder<SQL, Context>(::SQL)
@@ -48,7 +47,7 @@ class SQL private constructor(ctx: Context) : PagesRepository {
             throw IllegalStateException("Page was not cleared!")
     }
 
-    override fun addPage(ar: Float): Completable = queries.addPage(ar).let { return Completable.complete() }
+    override fun addPage(ar: Float) = queries.addPage(ar)
 
     override fun getPage(
         page: Int,

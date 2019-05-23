@@ -1,9 +1,9 @@
 package tech.jpco.qen.view
 
-import androidx.lifecycle.ViewModelProviders
 import android.os.Bundle
-import androidx.appcompat.app.AppCompatActivity
 import android.widget.Button
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.ViewModelProviders
 import com.jakewharton.rxbinding3.view.clicks
 import com.jakewharton.rxbinding3.view.layoutChanges
 import io.reactivex.Observable
@@ -12,10 +12,10 @@ import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.schedulers.Schedulers
 import kotlinx.android.synthetic.main.activity_main.*
 import tech.jpco.qen.R
+import tech.jpco.qen.iLogger
 import tech.jpco.qen.model.SQL
 import tech.jpco.qen.viewModel.MetaEvent
 import tech.jpco.qen.viewModel.QenViewModel
-import tech.jpco.qen.viewModel.iLogger
 import java.util.concurrent.TimeUnit
 
 //Copied from https://proandroiddev.com/til-when-is-when-exhaustive-31d69f630a8b

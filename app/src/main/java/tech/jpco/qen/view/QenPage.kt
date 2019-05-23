@@ -14,8 +14,8 @@ import com.jakewharton.rxbinding3.view.layoutChanges
 import com.jakewharton.rxbinding3.view.touches
 import io.reactivex.Observable
 import tech.jpco.qen.R
+import tech.jpco.qen.TAG
 import tech.jpco.qen.viewModel.DrawPoint
-import tech.jpco.qen.viewModel.TAG
 import tech.jpco.qen.viewModel.TouchEventType
 import java.util.concurrent.TimeUnit
 

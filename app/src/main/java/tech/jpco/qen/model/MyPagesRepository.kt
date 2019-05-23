@@ -1,7 +1,6 @@
 package tech.jpco.qen.model
 
 import android.content.Context
-import io.reactivex.Completable
 import io.reactivex.Observable
 import io.reactivex.Single
 import tech.jpco.qen.viewModel.DrawPoint
@@ -16,7 +15,9 @@ interface PagesRepository {
 
     val mostRecentPage: Int
 
-    fun addPage(ar: Float): Completable
+    fun addPage(ar: Float)
+
+    //TODO refactor this to return a nullable list instead of an empty one
     fun getPage(
         page: Int,
         retrieveContents: Boolean = true
