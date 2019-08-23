@@ -14,6 +14,7 @@ import io.reactivex.observers.TestObserver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExpectedException
@@ -24,12 +25,14 @@ import tech.jpco.qen.model.Firebase.addNewPage
 import tech.jpco.qen.model.Firebase.addTouchStream
 import tech.jpco.qen.model.Firebase.arKey
 import tech.jpco.qen.model.Firebase.awaitMaxPageAndSetIfAbsent
+import tech.jpco.qen.model.Firebase.currentPageClearedStream
 import tech.jpco.qen.model.Firebase.getMaxPage
 import tech.jpco.qen.model.Firebase.getPage
 import tech.jpco.qen.model.Firebase.iClearPage
 import tech.jpco.qen.model.Firebase.mostRecentPage
 import tech.jpco.qen.model.Firebase.pageUID
 import tech.jpco.qen.model.Firebase.pages
+import tech.jpco.qen.model.Firebase.setCurrentPageClearedListener
 import tech.jpco.qen.model.Firebase.touchHistory
 import tech.jpco.qen.model.Firebase.uids
 import tech.jpco.qen.viewModel.DrawPoint
@@ -38,6 +41,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.full.isSubclassOf
+import kotlin.reflect.full.memberProperties
+import kotlin.reflect.jvm.javaField
 
 typealias DatabaseTestAction = (DatabaseReference.() -> Completable)?
 
@@ -114,7 +119,8 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     @Test
     fun getMaxPageFromBlankTest() {
         dLogger("-----------")
-        maxPageTestPrototype().also { dLogger("Assertions running") }.assertValueCount(1).assertValueAt(0, 1)
+        maxPageTestPrototype().also { dLogger("Assertions running") }.assertValueCount(1)
+            .assertValueAt(0, 1)
         dLogger("-----------")
     }
 
@@ -142,8 +148,11 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     }
 
     @Test
+    @Ignore("This test isn't idempotent when run in series due to Firebase being an object")
     fun emptyMostRecentPageTest() {
         exception.expect(IllegalStateException::class.java)
+        //TODO reset maxPage lateinit backing field??
+        Firebase::class.memberProperties.find { it.name == "maxPage" }?.javaField
         mostRecentPage
     }
 
@@ -164,7 +173,7 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
             mostRecentPageTestPrototype {
                 addTouchStream(
                     Observable.just(DrawPoint(0f, 0f)), Observable.just(99)
-                ).firstOrError().ignoreElement()
+                ).log("touchStream").firstOrError().ignoreElement()
             }
         )
     }
@@ -173,7 +182,7 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
         fun Completable.awaitAssert() = blockingAwait(5, TimeUnit.SECONDS)
             .also { assertTrue("getMaxPage() timed out!", it) }
 
-        getMaxPage(Single.just(0f)).firstOrError().ignoreElement().awaitAssert()
+        getMaxPage(Single.just(0f)).log("gMP()").firstOrError().ignoreElement().awaitAssert()
 
         postAction().awaitAssert()
 
@@ -206,7 +215,8 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
                 .maxPageAwait()
                 .andThen(it())
                 .maxPageAwait()
-                .blockingAwait(4, TimeUnit.SECONDS).also { dLogger("aMPT()'s await finished in time", it) }
+                .blockingAwait(4, TimeUnit.SECONDS)
+                .also { dLogger("aMPT()'s await finished in time", it) }
             d.dispose()
         }
     }
@@ -283,14 +293,20 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
         Firebase.setTesting(true)
 
         val tO = Firebase.content {
-            Observable.interval(5, TimeUnit.MILLISECONDS).map { this[it.toInt()] }.take(this.size.toLong())
+            Observable.interval(5, TimeUnit.MILLISECONDS).map { this[it.toInt()] }
+                .take(this.size.toLong())
         }.test()
 
-        return tO.apply { await(2, TimeUnit.SECONDS) } //OF COURSE this is going to time out, it's an infinite stream!
+        return tO.apply {
+            await(
+                2,
+                TimeUnit.SECONDS
+            )
+        } //OF COURSE this is going to time out, it's an infinite stream!
     }
 
     private fun pageContributorListTestPrototype(page: Int) =
-        RxFirebaseDatabase.observeSingleValueEvent(Firebase.pages.child("$page/$uids"))
+        observeSingleValueEvent(pages.child("$page/$uids"))
             .doOnSuccess {
                 dLogger("pCLTP assert running")
                 assertEquals(
@@ -305,7 +321,9 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
         Firebase.setTesting(true)
         val maxPageStream =
             Firebase.getMaxPage(Single.just(0.25f)).log("maxPageStream").share()
-                .apply { test().awaitCount(1).assertOf { dLogger("maxPageStream fulfilled its await") } }
+                .apply {
+                    test().awaitCount(1).assertOf { dLogger("maxPageStream fulfilled its await") }
+                }
         dLogger("ramping up to concat")
         Completable.concat(List(7) {
             dLogger("iterated", it)
@@ -314,7 +332,8 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
                 .ambWith(maxPageStream.firstOrError().doOnSuccess { max ->
                     dLogger("submitted", ar to max)
                 }.ignoreElement())
-        }).blockingAwait(10, TimeUnit.SECONDS).also { dLogger("blocking await returned in time", it) }
+        }).blockingAwait(10, TimeUnit.SECONDS)
+            .also { dLogger("blocking await returned in time", it) }
 
         singleValueTestRunner(Firebase.pages.orderByChild(arKey).equalTo(1.25)) {
             assertEquals("Did not return the right page", 5, it.children.first().key!!.toInt())
@@ -363,9 +382,10 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
             "10" to uidsWrap(mapOf("CCC" to true))
         )
 
-        val uidIndexToIndexedUID = { pageEntry: Map.Entry<String, Map<String, Map<String, Boolean>>> ->
-            pageEntry.value.getValue(uids).map { pageUID(pageEntry.key.toInt(), it.key) }
-        }
+        val uidIndexToIndexedUID =
+            { pageEntry: Map.Entry<String, Map<String, Map<String, Boolean>>> ->
+                pageEntry.value.getValue(uids).map { pageUID(pageEntry.key.toInt(), it.key) }
+            }
 
         val touchListingBefore = uidIndexBefore.flatMap(uidIndexToIndexedUID)
             .associateWith { drawPointList(3) }
@@ -417,7 +437,8 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
                 {
                     var startIndex = 0
                     countMap.mapValues {
-                        touches.slice(startIndex.until(startIndex + it.value)).apply { startIndex += it.value }
+                        touches.slice(startIndex.until(startIndex + it.value))
+                            .apply { startIndex += it.value }
                     } - 3
                 }.invoke().mapKeys { pageUID(it.key) }
             )
@@ -451,15 +472,12 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
         dLogger("clearTouchComp expected", expectedTouchMap)
         dLogger("clearTouchComp actual", this)
 
-        fun Map<String, Map<String, Any>>.toList(): List<Map<String, Any>> {
-            return map { it.value }
-        }
-
         this.toSortedMap().mapValues { numberUidMapEntry ->
             try {
-                (numberUidMapEntry.value as Map<String, Map<String, Any>>).toSortedMap().map { pushMapEntry ->
-                    pushMapEntry.value.mapValues { it.value }
-                }
+                (numberUidMapEntry.value as Map<String, Map<String, Any>>).toSortedMap()
+                    .map { pushMapEntry ->
+                        pushMapEntry.value.mapValues { it.value }
+                    }
             } catch (e: ClassCastException) {
                 numberUidMapEntry.value as List<Map<String, Any>>
             }
@@ -469,9 +487,39 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     }
 
     @Test
-    fun getPageArAbsentFailureTest() {
-        exception.expect(IllegalStateException::class.java)
-        getPage(1, false)
+    fun pageClearListenerTest() {
+        val pageUnderTest = 42
+        val pageUnderTestStream = Observable.just(pageUnderTest)
+
+        val blockTest: Completable.(Long) -> Unit = { millis ->
+            blockingAwait(millis, TimeUnit.MILLISECONDS).also { check(it) }
+        }
+
+        Completable.mergeArray(
+            setValue(pages.child("$pageUnderTest/$arKey"), "NaN"),
+            addTouchStream(
+                Observable.just(DrawPoint(0f, 0f)),
+                pageUnderTestStream
+            ).firstOrError().ignoreElement()
+        ).blockTest(500)
+
+        setCurrentPageClearedListener(pageUnderTestStream)
+
+        val tester = currentPageClearedStream.test()
+
+        iClearPage(pageUnderTest).blockTest(500)
+
+        tester.assertValuesOnly(pageUnderTest)
+    }
+
+    @Test
+    fun getPageArAbsentDefaultTest() {
+        assertEquals(
+            "getPage() did not return the appropriate default for an absent record",
+            0f,
+            getPage(1, false).second
+        )
+
     }
 
     @Test
@@ -485,18 +533,20 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
     }
 
     @Test
-    fun getPageListSingleUserUnitSuccessTest() = getPageUnitTestPrototype(touchStreamTestContent, true) {
-        assertEquals("Did not return the correct DrawPoints", touchStreamTestContent, it)
-    }
+    fun getPageListSingleUserUnitSuccessTest() =
+        getPageUnitTestPrototype(touchStreamTestContent, true) {
+            assertEquals("Did not return the correct DrawPoints", touchStreamTestContent, it)
+        }
 
     @Test
-    fun getPageSingleUserListOptOutTest() = getPageUnitTestPrototype(touchStreamTestContent, false) {
-        assertEquals("Did not return an empty list", listOf<DrawPoint>(), it)
-    }
+    fun getPageSingleUserListOptOutTest() =
+        getPageUnitTestPrototype(touchStreamTestContent, false) {
+            assertEquals("Did not return an empty list", emptyList<DrawPoint>(), it)
+        }
 
     @Test
-    fun getPageSingleUserEmptyTest() = getPageUnitTestPrototype(listOf(), false) {
-        assertEquals("Did not return an empty list", listOf<DrawPoint>(), it)
+    fun getPageSingleUserEmptyTest() = getPageUnitTestPrototype(emptyList(), true) {
+        assertEquals("Did not return an empty list", emptyList<DrawPoint>(), it)
     }
 
     private fun getPageUnitTestPrototype(
@@ -513,10 +563,11 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
     private inline fun <reified T> Maybe<DataSnapshot>.singleEventTest() =
         test().awaitCount(1).values()[0].value.run {
-            (this as? List<Map<String, Any>?>)
-                ?.withIndex()
-                ?.filter { it.value != null }
-                ?.associate { it.index.toString() to it.value!! }
+            (this as? List<Map<String, Any>?>)?.run {
+                withIndex()
+                    .filter { it.value != null }
+                    .associate { it.index.toString() to it.value!! }
+            }
                 ?: this
         } as Map<String, T>
 }
@@ -554,7 +605,8 @@ open class FirebaseTestTooling {
             .doOnError { dLogger("$name errored", it) }
             .doOnSubscribe { dLogger("$name was subscribed") }
 
-    protected fun dLogger(output: String, obj: Any? = Unit) = if (DEBUG) this.iLogger(output, obj) else Unit
+    protected fun dLogger(output: String, obj: Any? = Unit) =
+        if (DEBUG) this.iLogger(output, obj) else Unit
 
     protected val singleValueTestRunner: (Query, (DataSnapshot) -> Unit) -> Unit = { ref, test ->
         RxFirebaseDatabase.observeSingleValueEvent(ref)
@@ -568,7 +620,8 @@ open class FirebaseTestTooling {
             .also(test)
     }
 
-    protected fun messageFormat(expect: Any?, found: Any?): String = "Expected $expect, found $found"
+    protected fun messageFormat(expect: Any?, found: Any?): String =
+        "Expected $expect, found $found"
 
     @Throws(java.lang.IllegalStateException::class, AssertionError::class)
     protected fun DataSnapshot.assertEqualWithPush(comparison: Any?) {
@@ -663,7 +716,8 @@ internal class FirebaseToolingTests : FirebaseTestTooling() {
     }
 
     @Test
-    fun aEWP_allSinglesInAndOut() = listOf("string", 1L, 2.0, false, null).forEach { aEWP_setup(it) }
+    fun aEWP_allSinglesInAndOut() =
+        listOf("string", 1L, 2.0, false, null).forEach { aEWP_setup(it) }
 
     @Test
     fun aEWP_invalidOriginalNoRefStandard() {
@@ -688,7 +742,8 @@ internal class FirebaseToolingTests : FirebaseTestTooling() {
     }
 
     @Test
-    fun aEWP_emitSingleCompareCollection() = setupMismatch("a string", listOf<Any>(), String::class, NESTED_DATA)
+    fun aEWP_emitSingleCompareCollection() =
+        setupMismatch("a string", emptyList<Any>(), String::class, NESTED_DATA)
 
     @Test
     fun aEWP_emitMapCompareString() {

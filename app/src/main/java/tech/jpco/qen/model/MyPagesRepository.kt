@@ -15,6 +15,9 @@ interface PagesRepository {
 
     val mostRecentPage: Int
 
+    var currentPageClearedStream: Observable<Int>
+    fun setCurrentPageClearedListener(pageStream: Observable<Int>)
+
     fun addPage(ar: Float)
 
     //TODO refactor this to return a nullable list instead of an empty one
