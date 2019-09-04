@@ -6,9 +6,9 @@ sealed class MetaEvent {
     object CyclePage : MetaEvent()
     object UiClearPage : MetaEvent()
     data class DbClearPage(val intendedPage: Int) : MetaEvent()
-    data class NewPage(val ar: Float) : MetaEvent()
+    data class NewPage(val aspectRatio: Float) : MetaEvent()
     data class SelectPage(val page: Int) : MetaEvent()
-    data class CurrentPage(val ar: Float) : MetaEvent()
+    data class CurrentPage(val aspectRatio: Float) : MetaEvent()
 }
 
 //TODO refactor content and ratio into normal data class implementation?

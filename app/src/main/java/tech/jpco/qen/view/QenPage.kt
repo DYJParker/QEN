@@ -15,17 +15,17 @@ import com.jakewharton.rxbinding3.view.touches
 import io.reactivex.Observable
 import tech.jpco.qen.R
 import tech.jpco.qen.TAG
+import tech.jpco.qen.iLogger
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 class QenPage @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
-    private var mHeight = 0
-    private var mWidth = 0
-    var ar = Float.NaN
-        private set
+    private var ar = Float.NaN
     private lateinit var bufferBitmap: Bitmap
     private lateinit var bufferCanvas: Canvas
     private val paint = Paint()
@@ -43,11 +43,11 @@ class QenPage @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         Log.d(TAG, "onSizeChanged called")
-        mHeight = h
-        mWidth = w
+//        mHeight = h
+//        mWidth = w
         ar = w.toFloat() / h
         //TODO make this resilient/persistent
-        bufferBitmap = Bitmap.createBitmap(mWidth, mHeight, Bitmap.Config.ARGB_8888)
+        bufferBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bufferCanvas = Canvas(bufferBitmap)
         super.onSizeChanged(w, h, oldw, oldh)
     }
@@ -67,7 +67,7 @@ class QenPage @JvmOverloads constructor(
             }
             DrawPoint(normX, normY, type)
         }
-        .filterForMinDistance { x, y -> Math.abs(x) + Math.abs(y) < normDistance(10) }
+        .filterForMinDistance { x, y -> abs(x) + abs(y) < normDistance(10) }
 
     val arStream: Observable<Float> = layoutChanges().map { ar }
 
@@ -84,7 +84,7 @@ class QenPage @JvmOverloads constructor(
     }
 
     fun clearPage() {
-        Log.d(TAG, "clearPage called")
+        iLogger("clearPage called")
         bufferBitmap.eraseColor(Color.TRANSPARENT)
         invalidate()
     }
@@ -92,20 +92,21 @@ class QenPage @JvmOverloads constructor(
     fun drawPage(list: List<DrawPoint>, newAR: Float) {
         clearPage()
         list.forEach { drawSegment(it, false) }
-        Log.d(TAG, "drawPage completing")
         invalidate()
     }
 
     //comment-detritus from aborted aspect-ratio implementation
     private fun normalize(x: Float, y: Float): Pair<Float, Float> =
-        /*if (ar < 1)*/ Pair(x / mWidth, y / mHeight)
+        /*if (aspectRatio < 1)*/ Pair(x / width, y / height)
     /*else Pair(y / mHeight, x / mWidth)*/
 
-    private fun normDistance(pixels: Int) = pixels / (Math.sqrt((mHeight * mHeight + mWidth * mWidth).toDouble()))
+    @Suppress("SameParameterValue")
+    private fun normDistance(pixels: Int) =
+        pixels / (sqrt((height * height + width * width).toDouble()))
 
     //comment-detritus from aborted aspect-ratio implementation
     private fun denormalize(relX: Float, relY: Float) =
-        /*if (ar < 1)*/ Pair(relX * mWidth, relY * mHeight)
+        /*if (aspectRatio < 1)*/ Pair(relX * width, relY * height)
     /*else Pair(relY * mHeight, relX * mWidth)*/
 
     private fun Observable<MotionEvent>.filterForActionAndTime(minMilli: Long): Observable<MotionEvent> =
@@ -129,26 +130,19 @@ class QenPage @JvmOverloads constructor(
     //scan() emits Pair(the last valid point, the new point IFF it's valid)
     //what's better, .filter().map() or .flatmap() using Observable.empty() and Observable.just(it)?
     private fun Observable<DrawPoint>.filterForMinDistance(tooClose: (Float, Float) -> Boolean): Observable<DrawPoint> =
-        scan(Pair<DrawPoint, DrawPoint?>(DrawPoint(Float.NaN, Float.NaN), null)) { standard, incoming ->
+        scan(DrawPoint(Float.NaN, Float.NaN)) { previousValid: DrawPoint, incoming: DrawPoint ->
             if (incoming.type == TouchEventType.TouchMove) {
-                val exX = standard.first.x
-                val exY = standard.first.y
-                if (exX != Float.NaN && exY != Float.NaN) {
+                val exX = previousValid.x
+                val exY = previousValid.y
+                if (!exX.isNaN() && !exY.isNaN()) {
                     val xDif = incoming.x - exX
                     val yDif = incoming.y - exY
                     if (tooClose(xDif, yDif)) {
-                        return@scan Pair(standard.first, null)
+                        return@scan previousValid
                     }
                 }
 
             }
-            Pair(incoming, incoming)
-
-        }
-            .filter {
-                it.second != null
-            }
-            .map {
-                it.second!!
-            }
+            incoming
+        }.distinctUntilChanged()
 }

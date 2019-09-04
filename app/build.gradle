@@ -13,8 +13,8 @@ android {
         applicationId "tech.jpco.qen"
         minSdkVersion 24
         targetSdkVersion 28
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "alpha1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     testOptions {
@@ -45,7 +45,7 @@ dependencies {
     implementation 'com.google.firebase:firebase-auth:19.0.0'
     implementation 'com.google.firebase:firebase-database:19.0.0'
     implementation 'com.github.FrangSierra:RxFirebase:1.5.7'
-    implementation 'com.github.tbruyelle:rxpermissions:0.10.2'
+//    implementation 'com.github.tbruyelle:rxpermissions:0.10.2'
     debugImplementation 'com.squareup.leakcanary:leakcanary-android:1.6.3'
     releaseImplementation 'com.squareup.leakcanary:leakcanary-android-no-op:1.6.3'
     androidTestImplementation 'androidx.test:runner:1.2.0'

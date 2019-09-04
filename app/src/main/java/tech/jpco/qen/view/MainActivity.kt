@@ -1,6 +1,5 @@
 package tech.jpco.qen.view
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.widget.Button
@@ -8,7 +7,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.ViewModelProviders
 import com.jakewharton.rxbinding3.view.clicks
 import com.jakewharton.rxbinding3.view.layoutChanges
-import com.tbruyelle.rxpermissions2.RxPermissions
 import io.reactivex.Completable
 import io.reactivex.Observable
 import io.reactivex.Scheduler
@@ -25,10 +23,6 @@ import tech.jpco.qen.viewModel.QenViewModel
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-//Copied from https://proandroiddev.com/til-when-is-when-exhaustive-31d69f630a8b
-val <T> T.exhaustive: T
-    get() = this
-
 class MainActivity : AppCompatActivity() {
     private val cd = CompositeDisposable()
     private val vm by lazy { ViewModelProviders.of(this).get(QenViewModel::class.java) }
@@ -39,16 +33,6 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         setupInStreams()
-
-        RxPermissions(this)
-            .request(
-                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                Manifest.permission.READ_EXTERNAL_STORAGE
-            )
-            .subscribe {
-                check(it)
-            }
-
     }
 
     override fun onStart() {
@@ -58,7 +42,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        cd.dispose()
+        iLogger("destroying")
+        cd.clear()
     }
 
     private fun setupOutStreams() {
@@ -73,24 +58,31 @@ class MainActivity : AppCompatActivity() {
 
         val metaStream: Observable<MetaEvent> =
             qenPage.arStream.doOnNext { iLogger("AR", it) }
-                .publish { ARs ->
+                .publish { aspectRatios ->
                     Observable.merge(
-                        ARs.startWith(0f).switchMap {
+                        aspectRatios.startWith(0f).switchMap {
                             new_button.throttledMetaEvent(
                                 MetaEvent.NewPage(
                                     it
                                 )
                             )
                         },
-                        ARs.take(1).map { MetaEvent.CurrentPage(it) },
+                        aspectRatios.take(1).map { MetaEvent.CurrentPage(it) },
                         cycle_button.throttledMetaEvent(MetaEvent.CyclePage, 50),
                         clear_button.throttledMetaEvent(MetaEvent.UiClearPage)
+
                     )
                 }
                 .doOnNext { iLogger("MetaEvent emitted new", it) }
-                .replay(5000, TimeUnit.MILLISECONDS)
-                .apply { connect() }
+                .replay(500, TimeUnit.MILLISECONDS)
+                .apply {
+                    connect().also {
+                        cd.add(it)
+                        iLogger("added internal replay starter to CD")
+                    }
+                }
                 .doOnNext { iLogger("MetaEvent replayed", it) }
+//                .takeUntil(qenPage.detaches().log("detaches", this))
                 .subscribeOn(AndroidSchedulers.mainThread())
 //                .observeOn(Schedulers.io())
 

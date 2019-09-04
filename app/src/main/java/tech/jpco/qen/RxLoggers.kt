@@ -56,3 +56,7 @@ fun Any.iLogger(output: String, obj: Any? = Unit) {
     val objS = if (obj == Unit) "" else ": $obj"
     Log.d(TAG, "$output$objS on ${name.substring(0, 1).toUpperCase()}${name.substring(1)}")
 }
+
+//Copied from https://proandroiddev.com/til-when-is-when-exhaustive-31d69f630a8b
+val <T> T.exhaustive: T
+    get() = this

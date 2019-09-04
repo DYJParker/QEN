@@ -186,7 +186,10 @@ internal class FirebaseKtTest : FirebaseTestTooling() {
 
         postAction().awaitAssert()
 
-        return mostRecentPage
+        return mostRecentPage /*Single.defer{Single.just(0.run {
+            dLogger("what thread am I on?")
+            mostRecentPage
+        }).log("inner test mRP", this)}.subscribeOn(Schedulers.io()).log("test mRP", this).blockingGet()*/
     }
 
     @Test

@@ -15,8 +15,8 @@ interface PagesRepository {
 
     val mostRecentPage: Int
 
-    var currentPageClearedStream: Observable<Int>
-    fun setCurrentPageClearedListener(pageStream: Observable<Int>)
+    //    var currentPageClearedStream: Observable<Int>
+    fun setCurrentPageClearedListener(pageStream: Observable<Int>): Observable<Int>
 
     fun addPage(ar: Float)
 

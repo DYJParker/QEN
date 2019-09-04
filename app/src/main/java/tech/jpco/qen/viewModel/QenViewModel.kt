@@ -21,11 +21,11 @@ class QenViewModel : ViewModel() {
     //TODO test the above description!
     private val touchesIn = PublishSubject.create<DrawPoint>()
     private val metaIn = PublishSubject.create<MetaEvent>()
-    private val mTouchesOut = PublishSubject.create<DrawPoint>()
-    private val mMetaOut = BehaviorSubject.create<SelectedPage>()
+    private val touchesOutSubject = PublishSubject.create<DrawPoint>()
+    private val metaOutSubject = BehaviorSubject.create<SelectedPage>()
 
-    val touchesOut: Observable<DrawPoint> = mTouchesOut
-    val metaOut: Observable<SelectedPage> = mMetaOut
+    val touchesOut: Observable<DrawPoint> = touchesOutSubject
+    val metaOut: Observable<SelectedPage> = metaOutSubject
 
 
     fun supply(
@@ -36,16 +36,19 @@ class QenViewModel : ViewModel() {
     ) {
         iLogger("supply")
         if (!metaIn.hasObservers()) {
+            val pageStreamProxy = PublishSubject.create<MetaEvent>()
             iLogger("connecting outstreams from VM")
             val stateStream =
                 metaProcessor(
                     repo,
-                    metaIn.log("metaIn", this),
+                    metaIn
+                        .log("metaIn", this)
+                        .mergeWith(pageStreamProxy.observeOn(scheduler)),
                     scheduler
                 )
                     .share()
-                    .apply { subscribe(mMetaOut) }
-            mMetaOut.onSubscribe(cd)
+                    .apply { subscribe(metaOutSubject) }
+            metaOutSubject.onSubscribe(cd)
 
             val pageStream =
                 stateStream
@@ -54,23 +57,26 @@ class QenViewModel : ViewModel() {
                     .share()
 
             repo.setCurrentPageClearedListener(pageStream)
+                .log("DB clear page stream", this)
+                .map { MetaEvent.DbClearPage(it) }
+                .subscribe(pageStreamProxy)
 
             repo
                 .addTouchStream(
                     touchesIn,
                     pageStream
                 )
-                .subscribe(mTouchesOut)
-            mTouchesOut.onSubscribe(cd)
+                .subscribe(touchesOutSubject)
+            touchesOutSubject.onSubscribe(cd)
         }
 
         events
             .log("Received from UI", this)
-            .mergeWith(
+            /*.mergeWith(
                 repo.currentPageClearedStream
                     .log("DB clear page stream", this)
                     .map { MetaEvent.DbClearPage(it) }
-            )
+            )*/
             .observeOn(scheduler)
             .subscribe(metaIn)
         touches
@@ -80,7 +86,7 @@ class QenViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        cd.dispose()
+        cd.clear()
         super.onCleared()
     }
 
@@ -94,7 +100,7 @@ class QenViewModel : ViewModel() {
             inStream
                 .ofType(MetaEvent.CurrentPage::class.java)
                 .firstOrError()
-                .map { it.ar }
+                .map { it.aspectRatio }
                 .log("arSingle", this)
                 .cache()
                 .doOnSuccess { iLogger("arSingle emitted") }
@@ -145,14 +151,14 @@ class QenViewModel : ViewModel() {
                             retrievePage(incomingEvent.page)
                         }
                         is MetaEvent.NewPage -> {
-                            repo.addPage(incomingEvent.ar)
+                            repo.addPage(incomingEvent.aspectRatio)
                             mootPage
                         }
                         is MetaEvent.CurrentPage -> retrievePage(currentPage)
                         is MetaEvent.DbClearPage -> {
                             if (incomingEvent.intendedPage == currentPage)
                                 retrievePage(currentPage)
-                            else SelectedPage(currentPage, maxPage)
+                            else mootPage
                         }
                     }
                 }
@@ -170,7 +176,7 @@ class QenViewModel : ViewModel() {
                 .startWith(retrievePage(maxPage))*/
                 /*.publish { observable ->
                     observable.ofType(MetaEvent.NewPage::class.java)
-                        .subscribe { repo.addPage(it.ar) }
+                        .subscribe { repo.addPage(it.aspectRatio) }
                     observable.ofType(MetaEvent.UiClearPage::class.java)
                         .subscribe{repo.clearPage(curren)}
                     observable.filter { it !is MetaEvent.NewPage }*/.process()

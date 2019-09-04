@@ -80,10 +80,10 @@ object Firebase : PagesRepository {
                 .blockingGet()!!
         }
 
-    override lateinit var currentPageClearedStream: Observable<Int>
+//    override lateinit var currentPageClearedStream: Observable<Int>
 
-    override fun setCurrentPageClearedListener(pageStream: Observable<Int>) {
-        currentPageClearedStream = pageStream.switchMap { currentPage ->
+    override fun setCurrentPageClearedListener(pageStream: Observable<Int>): Observable<Int> {
+        return pageStream.switchMap { currentPage ->
             RxFirebaseDatabase.observeValueEvent(pages.child("$currentPage/$uids")) {
                 it.exists()
             }.log("firebase clearpagestream page #$currentPage", this)
@@ -115,7 +115,7 @@ object Firebase : PagesRepository {
         inStream
             .log("inStream", this)
             .withLatestFrom(
-                multiPageStream.log("pageStream", this).doOnNext {
+                multiPageStream.doOnNext {
                     database.child(mostRecentKey).setValue(it)
                     pages.child("$it/$uids/$UID").setValue(true)
                 },
@@ -125,33 +125,13 @@ object Firebase : PagesRepository {
             )
             .subscribe { it.first.push().setValue(it.second) }
 
-        fun fakeFirebaseTimestamp(now: Long): String {
-            var mutableNow = now
-            var i = 7
-
-            val builder = StringBuilder()
-
-            while (i >= 0) {
-                builder.append("-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"[(mutableNow % 64L).toInt()])
-                mutableNow /= 64L
-                --i
-            }
-
-            return builder.reverse().toString()
-        }
-
-        //TODO make the filter on the firebase side and not post-facto
         return multiPageStream.switchMap { currentPage ->
-            val currentStamp = fakeFirebaseTimestamp(System.currentTimeMillis() - 500)
+            val currentStamp = touchHistory.push().key!!
+            iLogger("current stamp", currentStamp)
             RxFirebaseDatabase.observeChildEvent(
-                touchHistory.child(pageUID(currentPage)),
+                touchHistory.child(pageUID(currentPage)).orderByKey().startAt(currentStamp),
                 BackpressureStrategy.BUFFER
             )
-//                .observeOn(Schedulers.io())
-                .filter {
-                    it.eventType == RxFirebaseChildEvent.EventType.ADDED &&
-                            it.key.substring(0, 8) > currentStamp
-                }
                 .doOnNext {
                     iLogger("fb emitted", it.key to it.value.value)
                 }
@@ -229,10 +209,6 @@ object Firebase : PagesRepository {
 
     //TODO make this smarter with regard to pre-initialization access?
     private lateinit var maxPage: Observable<Int>
-    /*get() {
-        if (!::maxPage.isInitialized) throw java.lang.IllegalStateException("getMaxPage() must be called before current operation")
-        return field
-    }*/
 
     override fun getMaxPage(fallbackAR: Single<Float>): Observable<Int> {
         val orderedPages = pages.orderByKey().limitToLast(1)

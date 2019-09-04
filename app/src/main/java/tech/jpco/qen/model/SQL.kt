@@ -14,11 +14,7 @@ import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
 
 class SQL private constructor(ctx: Context) : PagesRepository {
-    override var currentPageClearedStream: Observable<Int>
-        get() = TODO("not implemented") //To change initializer of created properties use File | Settings | File Templates.
-        set(value) {}
-
-    override fun setCurrentPageClearedListener(pageStream: Observable<Int>) {
+    override fun setCurrentPageClearedListener(pageStream: Observable<Int>): Observable<Int> {
         TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
     }
 
