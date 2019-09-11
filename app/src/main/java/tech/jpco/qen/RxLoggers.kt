@@ -33,7 +33,7 @@ fun <T> Flowable<T>.log(name: String, origin: Any): Flowable<T> =
 fun <T> Maybe<T>.log(name: String, origin: Any): Maybe<T> =
     doOnSubscribe { origin.iLogger("$name was subscribed") }
         .doOnEvent { content, throwable ->
-            iLogger(
+            origin.iLogger(
                 "$name returned",
                 throwable ?: content ?: "a completion"
             )

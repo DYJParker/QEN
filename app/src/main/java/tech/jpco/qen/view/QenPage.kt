@@ -86,7 +86,10 @@ class QenPage @JvmOverloads constructor(
         lastPoint = if (denormNew.type == TouchEventType.TouchUp) null else denormNew
     }
 
-    fun observeTouchStream(touchStream: Observable<DrawPoint>): Disposable =
+    fun observeTouchStream(
+        touchStream: Observable<DrawPoint>,
+        invalidateImmediately: Boolean = true
+    ): Disposable =
         touchStream
             .scan(Pair<DrawPoint?, DrawPoint>(null, DrawPoint(Float.NaN, Float.NaN))) { pair, new ->
                 val denormNew = new.denormalize()
@@ -98,10 +101,11 @@ class QenPage @JvmOverloads constructor(
             .filter { it.first != null }
             .map { it as Pair<DrawPoint, DrawPoint> }
             .observeOn(AndroidSchedulers.mainThread())
+            .run { if (!invalidateImmediately) doOnComplete { invalidate() } else this }
             .subscribe {
                 iLogger("drawing ${it.second}")
                 it.apply { bufferCanvas.drawLine(first.x, first.y, second.x, second.y, paint) }
-                invalidate()
+                if (invalidateImmediately) invalidate()
             }
 
     fun clearPage() {
@@ -110,10 +114,11 @@ class QenPage @JvmOverloads constructor(
         invalidate()
     }
 
-    fun drawPage(list: List<DrawPoint>, newAR: Float) {
+    fun drawPage(list: List<List<DrawPoint>>, newAR: Float) {
         clearPage()
-        list.forEach { oldDrawSegment(it, false) }
-        invalidate()
+        list.forEach {
+            observeTouchStream(Observable.fromIterable(it), false)
+        }
     }
 
     //comment-detritus from aborted aspect-ratio implementation

@@ -149,18 +149,10 @@ object Firebase : PagesRepository {
 
                         snapshot.children
                             .map { it.key!! }
-                            .run {
-                                val myIndex = indexOf(UID)
-                                if (myIndex < 0) return@map addMyUid()
-                                if (myIndex == 0) this
-                                else mutableListOf(get(myIndex)).also {
-                                    it.addAll(slice(0 until myIndex))
-                                    if (myIndex < size - 1) it.addAll(slice(myIndex + 1 until size))
-                                }
-
-                            }
+                            .reorderUids { return@map addMyUid() }
                             .also { iLogger("UID list", it) }
                             .map { uidToListenTo ->
+                                check(uidToListenTo != null)
                                 RxFirebaseDatabase.observeChildEvent(
                                     touchHistory.child(pageUID(currentPage, uidToListenTo))
                                         .orderByKey()
@@ -186,11 +178,21 @@ object Firebase : PagesRepository {
             }.log("list of touchstreams", this)
     }
 
+    private inline fun List<String>.reorderUids(onEmpty: (List<String>) -> List<String?>): List<String?> {
+        val myIndex = indexOf(UID)
+        if (myIndex < 0) return onEmpty(this)
+        return if (myIndex == 0) this
+        else mutableListOf(get(myIndex)).also {
+            it.addAll(slice(0 until myIndex))
+            if (myIndex < size - 1) it.addAll(slice(myIndex + 1 until size))
+        }
+    }
+
 
     override fun clearPage(page: Int) {
         iClearPage(page).subscribe()
     }
-    
+
     @VisibleForTesting
     internal fun iClearPage(page: Int): Completable {
         fun nuke(key: String) = RxFirebaseDatabase.setValue(touchHistory.child(key), null)
@@ -201,13 +203,9 @@ object Firebase : PagesRepository {
                 targetList.addAll(
                     userDataSnapshot.children.map { pageUID(page, it.key!!) }
                 )
-                Completable.merge(targetList.also {
-                    iLogger(
-                        "list contents",
-                        it
-                    )
-                }.map { nuke(it) } +
-                        RxFirebaseDatabase.setValue(pages.child("$page/$uids"), null))
+                Completable.merge(
+                    targetList.also { iLogger("list contents", it) }.map { nuke(it) } +
+                            RxFirebaseDatabase.setValue(pages.child("$page/$uids"), null))
             }
     }
 
@@ -235,19 +233,31 @@ object Firebase : PagesRepository {
     override fun getPage(
         page: Int,
         retrieveContents: Boolean
-    ): Pair<List<DrawPoint>, Float> {
+    ): Pair<List<List<DrawPoint>>, Float> {
         return Single.zip(
             (if (retrieveContents) {
-                RxFirebaseDatabase.observeSingleValueEvent(touchHistory.child(pageUID(page))) { pageListingSnap ->
-                    pageListingSnap.children.toList().map { pointSnapshot ->
-                        pointSnapshot.toDrawPoint()
-                    }
-                }.toSingle(emptyList())
+                RxFirebaseDatabase.observeSingleValueEvent(pages.child("$page/$uids")) { uidSnapshot: DataSnapshot ->
+                    uidSnapshot.children.map { it.key!! }.reorderUids { it }
+                }
+                    .log("getPage uid List", this)
+                    .flatMapSingleElement { uidList ->
+                        Observable.fromIterable(uidList)
+                            .log("getPage uid Observable", this)
+                            .concatMapMaybe { uid ->
+                                RxFirebaseDatabase.observeSingleValueEvent(
+                                    touchHistory.child(pageUID(page, uid))
+                                ) { pageListingSnap ->
+                                    pageListingSnap.children.map { pointSnapshot ->
+                                        pointSnapshot.toDrawPoint()
+                                    }
+                                }.log("getPage for uid $uid", this)
+                            }.toList()
+                    }.toSingle(emptyList())
             } else Single.just(emptyList())),
             RxFirebaseDatabase.observeSingleValueEvent(pages.child("$page/$arKey")) { it.value }
 //                .doOnComplete { throw IllegalStateException("No recorded AR for the requested page, #$page") }
                 .toSingle(0),
-            BiFunction { list: List<DrawPoint>, ar: Any? -> list to (ar as Number).toFloat() }
+            BiFunction { list: List<List<DrawPoint>>, ar: Any? -> list to (ar as Number).toFloat() }
         ).blockingGet()
     }
 

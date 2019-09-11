@@ -13,19 +13,22 @@ sealed class MetaEvent {
 
 //TODO refactor content and ratio into normal data class implementation?
 data class SelectedPage(val current: Int, val total: Int) {
-    var content: List<DrawPoint> = emptyList()
+    var content: List<List<DrawPoint>> = emptyList()
         private set
 
     var ratio: Float = NaN
         private set
 
-    constructor(current: Int, total: Int, content: List<DrawPoint>, ratio: Float) : this(current, total) {
+    constructor(current: Int, total: Int, content: List<List<DrawPoint>>, ratio: Float) : this(
+        current,
+        total
+    ) {
         this.content = content
         this.ratio = ratio
     }
 
     override fun toString(): String =
-        "${this::class.simpleName}(current=$current, total=$total, content.size=${content.size}, ratio=$ratio) " +
+        "${this::class.simpleName}(current=$current, total=$total, content.sizes=${content.map { it.size }}, ratio=$ratio) " +
                 "@${System.identityHashCode(this)}"
 }
 

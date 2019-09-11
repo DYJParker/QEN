@@ -28,7 +28,7 @@ interface PagesRepository {
     fun getPage(
         page: Int,
         retrieveContents: Boolean = true
-    ): Pair<List<DrawPoint>, Float>
+    ): Pair<List<List<DrawPoint>>, Float>
 
     fun getMaxPage(fallbackAR: Single<Float>): Observable<Int>
 }

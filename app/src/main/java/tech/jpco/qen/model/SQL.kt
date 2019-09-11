@@ -50,13 +50,17 @@ class SQL private constructor(ctx: Context) : PagesRepository {
 
     override fun addPage(ar: Float) = queries.addPage(ar)
 
-    override fun getPage(
+    /*override fun getPage(
         page: Int,
         retrieveContents: Boolean
     ): Pair<List<DrawPoint>, Float> = Pair(
         if (retrieveContents) getSelectedPagePoints(page) else listOf(),
         queries.getAR(page).executeAsOne()
-    )
+    )*/
+
+    override fun getPage(page: Int, retrieveContents: Boolean): Pair<List<List<DrawPoint>>, Float> {
+        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+    }
 
     private val mapper = { x: Float, y: Float, type: TouchEventType -> DrawPoint(x, y, type) }
 
