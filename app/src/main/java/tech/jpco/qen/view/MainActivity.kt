@@ -113,9 +113,7 @@ class MainActivity : AppCompatActivity() {
             vm.touchesOut
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe { list ->
-                    list.forEach { observable ->
-                        cd.add(qenPage.observeTouchStream(observable))
-                    }
+                    qenPage.observeTouchStreamList(list).forEach { cd.add(it) }
                 },
             vm.metaOut
                 .observeOn(AndroidSchedulers.mainThread())
@@ -128,15 +126,13 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun Scheduler.offload(block: Boolean = true, load: () -> Unit) =
+    private fun Scheduler.offload(load: () -> Unit) =
         Completable.create {
             load()
             it.onComplete()
         }
             .subscribeOn(this)
             .log("offloader", this@MainActivity)
-            ./*run {
-                if (block) blockingAwait()
-                else */subscribe()
+            .subscribe()
     /*}*/
 }

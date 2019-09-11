@@ -9,13 +9,11 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
-import androidx.core.content.res.ResourcesCompat
 import com.jakewharton.rxbinding3.view.layoutChanges
 import com.jakewharton.rxbinding3.view.touches
 import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
-import tech.jpco.qen.R
 import tech.jpco.qen.TAG
 import tech.jpco.qen.iLogger
 import tech.jpco.qen.log
@@ -32,12 +30,9 @@ class QenPage @JvmOverloads constructor(
     private lateinit var bufferBitmap: Bitmap
     private lateinit var bufferCanvas: Canvas
     private val paint = Paint()
-    private var lastPoint: DrawPoint? = null
-
-    init {
-        paint.color = ResourcesCompat.getColor(resources, R.color.colorPrimaryDark, null)
-        paint.strokeWidth = 7f
-    }
+    private val hypoteneuse
+        get() = sqrt((height * height + width * width).toDouble())
+            .also { if (it == 0.0) iLogger("hypoteneuse was zero!") }
 
     override fun onDraw(canvas: Canvas?) {
         super.onDraw(canvas)
@@ -46,66 +41,81 @@ class QenPage @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         Log.d(TAG, "onSizeChanged called")
-//        mHeight = h
-//        mWidth = w
         ar = w.toFloat() / h
+        paint.strokeWidth = (hypoteneuse / 300).toFloat()
         //TODO make this resilient/persistent
         bufferBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bufferCanvas = Canvas(bufferBitmap)
         super.onSizeChanged(w, h, oldw, oldh)
     }
 
-    val touchStream: Observable<DrawPoint> = touches()
-        .filterForActionAndTime(50)
-        .map {
-            val (normX, normY) = normalize(it.x, it.y)
-            val type = when (it.action) {
-                MotionEvent.ACTION_DOWN -> TouchEventType.TouchDown
-                MotionEvent.ACTION_UP -> TouchEventType.TouchUp
-                MotionEvent.ACTION_MOVE -> TouchEventType.TouchMove
-                else -> throw IllegalArgumentException(
-                    "Tried to turn a MotionEvent other than Down, Up, or " +
-                            "Move into a DrawPoint!"
-                )
-            }
-            DrawPoint(normX, normY, type)
+
+    val touchStream: Observable<DrawPoint>
+        get() {
+            val normalizedDistance = normDistance(15)
+            return touches()
+                .filterForActionAndTime(33)
+                .map {
+                    val (normX, normY) = normalize(it.x, it.y)
+                    val type = when (it.action) {
+                        MotionEvent.ACTION_DOWN -> TouchEventType.TouchDown
+                        MotionEvent.ACTION_UP -> TouchEventType.TouchUp
+                        MotionEvent.ACTION_MOVE -> TouchEventType.TouchMove
+                        else -> throw IllegalArgumentException(
+                            "Tried to turn a MotionEvent other than Down, Up, or " +
+                                    "Move into a DrawPoint!"
+                        )
+                    }
+                    DrawPoint(normX, normY, type)
+                }
+                .filterForMinDistance { x, y -> abs(x) + abs(y) < normalizedDistance }
         }
-        .filterForMinDistance { x, y -> abs(x) + abs(y) < normDistance(10) }
 
     val arStream: Observable<Float> = layoutChanges().map { ar }
 
-    fun oldDrawSegment(new: DrawPoint, shouldInvalidate: Boolean = true) {
-        val (denormX, denormY) = oldDenormalize(new.x, new.y)
-        val denormNew = new.copy(x = denormX, y = denormY)
-        if (lastPoint != null && denormNew.type != TouchEventType.TouchDown) {
-            lastPoint?.apply {
-                bufferCanvas.drawLine(x, y, denormNew.x, denormNew.y, paint)
-                if (shouldInvalidate) invalidate()
-            }
-        }
-        lastPoint = if (denormNew.type == TouchEventType.TouchUp) null else denormNew
-    }
-
-    fun observeTouchStream(
-        touchStream: Observable<DrawPoint>,
-        invalidateImmediately: Boolean = true
-    ): Disposable =
-        touchStream
-            .scan(Pair<DrawPoint?, DrawPoint>(null, DrawPoint(Float.NaN, Float.NaN))) { pair, new ->
+    fun observeTouchStreamList(touchStreams: List<Observable<DrawPoint>>): List<Disposable> {
+        var counter = 0
+        return touchStreams.map { userStream ->
+            val localPaint = newPaint(counter++)
+            userStream.scan(
+                Pair<DrawPoint?, DrawPoint>(null, DrawPoint(Float.NaN, Float.NaN))
+            ) { pair, new ->
                 if (pair.second.x.isNaN() || new.type == TouchEventType.TouchDown)
                     return@scan null to new
                 pair.second to new
             }
-            .log("paired touchstream", this)
-            .filter { it.first != null }
-            .map { it as Pair<DrawPoint, DrawPoint> }
-            .observeOn(AndroidSchedulers.mainThread())
-            .run { if (!invalidateImmediately) doOnComplete { invalidate() } else this }
-            .subscribe {
-                iLogger("drawing ${it.second}")
-                it.drawLine()
-                if (invalidateImmediately) invalidate()
-            }
+                .log("paired touchstream", this)
+                .filter { it.first != null }
+                .map { it as Pair<DrawPoint, DrawPoint> }
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe {
+                    iLogger("drawing ${it.second}")
+                    it.drawLine(localPaint)
+                    invalidate()
+                }
+        }
+    }
+
+    private val goldenConjugate = (2 / (sqrt(5f) + 1))
+    private val paintSequenceList = mutableListOf<Paint>()
+    private val newPaint: (Int) -> Paint = { counter ->
+        iLogger("paint counter", counter)
+        if (paintSequenceList.size > counter) paintSequenceList[counter]
+        else Paint().apply {
+            strokeWidth = paint.strokeWidth
+            color =
+                if (counter == 0) Color.BLACK
+                //below is a riff on https://gamedev.stackexchange.com/a/46469
+                else Color.HSVToColor(
+                    floatArrayOf(
+                        360 * (((counter - 1) * goldenConjugate) % 1),
+                        1f,
+                        0.85f
+                    )
+                )
+            iLogger("actual color", color)
+        }.also { paintSequenceList += it }
+    }
 
     fun clearPage() {
         iLogger("clearPage called")
@@ -114,33 +124,31 @@ class QenPage @JvmOverloads constructor(
     }
 
     fun drawPage(list: List<List<DrawPoint>>, newAR: Float) {
+        clearPage()
+        var counter = 0
         list.forEach { userList ->
+            iLogger("drawPage counter", counter)
+            val localPaint = newPaint(counter)
             userList.zipWithNext().forEach {
-                if (it.first.type != TouchEventType.TouchUp) it.drawLine()
+                if (it.first.type != TouchEventType.TouchUp) it.drawLine(localPaint)
             }
+            counter++
         }
         iLogger("---- invalidating")
         invalidate()
     }
 
-    private fun Pair<DrawPoint, DrawPoint>.drawLine() =
+    private fun Pair<DrawPoint, DrawPoint>.drawLine(paint: Paint) =
         (first.denormalize() to second.denormalize()).run {
             bufferCanvas.drawLine(first.x, first.y, second.x, second.y, paint)
         }
 
-    //comment-detritus from aborted aspect-ratio implementation
-    private fun normalize(x: Float, y: Float): Pair<Float, Float> =
-        /*if (aspectRatio < 1)*/ Pair(x / width, y / height)
-    /*else Pair(y / mHeight, x / mWidth)*/
+    private fun normalize(x: Float, y: Float): Pair<Float, Float> = (x / width) to (y / height)
+
 
     @Suppress("SameParameterValue")
     private fun normDistance(pixels: Int) =
-        pixels / (sqrt((height * height + width * width).toDouble()))
-
-    //comment-detritus from aborted aspect-ratio implementation
-    private fun oldDenormalize(relX: Float, relY: Float) =
-        /*if (aspectRatio < 1)*/ Pair(relX * width, relY * height)
-    /*else Pair(relY * mHeight, relX * mWidth)*/
+        (pixels / (hypoteneuse)).also { iLogger("normalized distance", it) }
 
     private fun DrawPoint.denormalize() = copy(x = x * width, y = y * height)
 

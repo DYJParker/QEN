@@ -34,7 +34,6 @@ object Firebase : PagesRepository {
                     .run {
                         if (testing) getReference(testOffset) else reference
                     }
-//                    .child(it.user.uid)
             }
             .blockingGet()
     }
@@ -82,8 +81,6 @@ object Firebase : PagesRepository {
                 .log("mostRecentPage", this)
                 .blockingGet()!!
         }
-
-//    override lateinit var currentPageClearedStream: Observable<Int>
 
     override fun setCurrentPageClearedListener(pageStream: Observable<Int>): Observable<Int> {
         return pageStream.switchMap { currentPage ->
@@ -229,7 +226,6 @@ object Firebase : PagesRepository {
         }
     }
 
-    //    @Throws(IllegalStateException::class)
     override fun getPage(
         page: Int,
         retrieveContents: Boolean
@@ -237,12 +233,10 @@ object Firebase : PagesRepository {
         return Single.zip(
             (if (retrieveContents) {
                 RxFirebaseDatabase.observeSingleValueEvent(pages.child("$page/$uids")) { uidSnapshot: DataSnapshot ->
-                    uidSnapshot.children.map { it.key!! }.reorderUids { it }
+                    uidSnapshot.children.map { it.key!! }.reorderUids { listOf("") + it }
                 }
-                    .log("getPage uid List", this)
                     .flatMapSingleElement { uidList ->
                         Observable.fromIterable(uidList)
-                            .log("getPage uid Observable", this)
                             .concatMapMaybe { uid ->
                                 RxFirebaseDatabase.observeSingleValueEvent(
                                     touchHistory.child(pageUID(page, uid))
@@ -250,12 +244,11 @@ object Firebase : PagesRepository {
                                     pageListingSnap.children.map { pointSnapshot ->
                                         pointSnapshot.toDrawPoint()
                                     }
-                                }.log("getPage for uid $uid", this)
+                                }.defaultIfEmpty(emptyList())
                             }.toList()
                     }.toSingle(emptyList())
             } else Single.just(emptyList())),
             RxFirebaseDatabase.observeSingleValueEvent(pages.child("$page/$arKey")) { it.value }
-//                .doOnComplete { throw IllegalStateException("No recorded AR for the requested page, #$page") }
                 .toSingle(0),
             BiFunction { list: List<List<DrawPoint>>, ar: Any? -> list to (ar as Number).toFloat() }
         ).blockingGet()
