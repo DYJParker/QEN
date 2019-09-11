@@ -112,8 +112,10 @@ class MainActivity : AppCompatActivity() {
         cd.addAll(
             vm.touchesOut
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe {
-                    qenPage.drawSegment(it)
+                .subscribe { list ->
+                    list.forEach { observable ->
+                        cd.add(qenPage.observeTouchStream(observable))
+                    }
                 },
             vm.metaOut
                 .observeOn(AndroidSchedulers.mainThread())

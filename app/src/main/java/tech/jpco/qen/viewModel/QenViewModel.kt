@@ -1,5 +1,6 @@
 package tech.jpco.qen.viewModel
 
+import android.annotation.SuppressLint
 import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import io.reactivex.Observable
@@ -21,13 +22,14 @@ class QenViewModel : ViewModel() {
     //TODO test the above description!
     private val touchesIn = PublishSubject.create<DrawPoint>()
     private val metaIn = PublishSubject.create<MetaEvent>()
-    private val touchesOutSubject = PublishSubject.create<DrawPoint>()
+    private val touchesOutSubject = PublishSubject.create<List<Observable<DrawPoint>>>()
     private val metaOutSubject = BehaviorSubject.create<SelectedPage>()
 
-    val touchesOut: Observable<DrawPoint> = touchesOutSubject
+    val touchesOut: Observable<List<Observable<DrawPoint>>> = touchesOutSubject
     val metaOut: Observable<SelectedPage> = metaOutSubject
 
 
+    @SuppressLint("CheckResult")
     fun supply(
         repo: PagesRepository,
         touches: Observable<DrawPoint>,
@@ -66,6 +68,14 @@ class QenViewModel : ViewModel() {
                     touchesIn,
                     pageStream
                 )
+                .observeOn(scheduler)
+                .map {
+                    it.mapIndexed { index, observable ->
+                        observable.log("touch stream #$index", this).also {
+                            iLogger("logging touch stream $index")
+                        }
+                    }
+                }
                 .subscribe(touchesOutSubject)
             touchesOutSubject.onSubscribe(cd)
         }

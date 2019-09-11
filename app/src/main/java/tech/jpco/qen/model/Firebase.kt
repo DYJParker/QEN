@@ -48,8 +48,6 @@ object Firebase : PagesRepository {
     @VisibleForTesting
     internal const val touchTypeKey = "type"
     @VisibleForTesting
-    internal const val UID = "UID"
-    @VisibleForTesting
     internal const val mostRecentKey = "most recent"
     @VisibleForTesting
     internal const val uids = "UIDs"
@@ -57,6 +55,11 @@ object Firebase : PagesRepository {
     internal val pages by lazy { database.child("pages") }
     @VisibleForTesting
     internal val touchHistory by lazy { database.child("touch history") }
+
+    @VisibleForTesting
+    internal val UID by lazy {
+        FirebaseAuth.getInstance().currentUser!!.uid
+    }
 
     @VisibleForTesting
     internal fun pageUID(currentPage: Int, uid: String = UID) = "$currentPage-$uid"
@@ -109,7 +112,7 @@ object Firebase : PagesRepository {
     override fun addTouchStream(
         inStream: Observable<DrawPoint>,
         pageStream: Observable<Int>
-    ): Observable<DrawPoint> {
+    ): Observable<List<Observable<DrawPoint>>> {
         val multiPageStream = pageStream.share()
 
         inStream
@@ -125,28 +128,69 @@ object Firebase : PagesRepository {
             )
             .subscribe { it.first.push().setValue(it.second) }
 
-        return multiPageStream.switchMap { currentPage ->
-            val currentStamp = touchHistory.push().key!!
-            iLogger("current stamp", currentStamp)
-            RxFirebaseDatabase.observeChildEvent(
-                touchHistory.child(pageUID(currentPage)).orderByKey().startAt(currentStamp),
-                BackpressureStrategy.BUFFER
-            )
-                .doOnNext {
-                    iLogger("fb emitted", it.key to it.value.value)
-                }
-                .map { childEvent ->
-                    childEvent.value.toDrawPoint()
-                }
-                .toObservable()
-        }
+        return multiPageStream
+            .switchMap { currentPage ->
+                RxFirebaseDatabase.observeValueEvent(pages.child("$currentPage/$uids"))
+                    .toObservable()
+                    .observeOn(Schedulers.io())
+                    .log("uidList", this)
+                    .map { snapshot ->
+                        val addMyUid = {
+                            snapshot.ref.updateChildren(mapOf(UID to true))
+                            emptyList<Observable<DrawPoint>>()
+                        }
+
+                        if (!snapshot.hasChildren()) {
+                            return@map addMyUid()
+                        }
+
+                        val currentStamp = touchHistory.push().key!!
+                        iLogger("current stamp", currentStamp)
+
+                        snapshot.children
+                            .map { it.key!! }
+                            .run {
+                                val myIndex = indexOf(UID)
+                                if (myIndex < 0) return@map addMyUid()
+                                if (myIndex == 0) this
+                                else mutableListOf(get(myIndex)).also {
+                                    it.addAll(slice(0 until myIndex))
+                                    if (myIndex < size - 1) it.addAll(slice(myIndex + 1 until size))
+                                }
+
+                            }
+                            .also { iLogger("UID list", it) }
+                            .map { uidToListenTo ->
+                                RxFirebaseDatabase.observeChildEvent(
+                                    touchHistory.child(pageUID(currentPage, uidToListenTo))
+                                        .orderByKey()
+                                        .startAt(currentStamp),
+                                    BackpressureStrategy.BUFFER
+                                )
+                                    .observeOn(Schedulers.io())
+                                    .doOnNext {
+                                        iLogger("fb emitted", it.key to it.value.value)
+                                    }
+                                    .filter { childEvent -> childEvent.eventType == RxFirebaseChildEvent.EventType.ADDED }
+                                    .map { childEvent ->
+                                        childEvent.value.toDrawPoint()
+                                    }
+                                    .toObservable()
+                                    .takeUntil(multiPageStream)
+                                    .log(
+                                        "touchstream for UID $uidToListenTo on page $currentPage",
+                                        this
+                                    )
+                            }
+                    }
+            }.log("list of touchstreams", this)
     }
+
 
     override fun clearPage(page: Int) {
         iClearPage(page).subscribe()
     }
-
-    @SuppressLint("CheckResult")
+    
     @VisibleForTesting
     internal fun iClearPage(page: Int): Completable {
         fun nuke(key: String) = RxFirebaseDatabase.setValue(touchHistory.child(key), null)
@@ -216,7 +260,7 @@ object Firebase : PagesRepository {
         val ongoingMaxPageObservable =
             RxFirebaseDatabase.observeValueEvent(orderedPages, BackpressureStrategy.LATEST)
                 .map {
-                    it.children.last().key!!.toInt()
+                    it.children.lastOrNull()?.key?.toInt() ?: 1
                 }
                 .toObservable()
                 .observeOn(Schedulers.io())

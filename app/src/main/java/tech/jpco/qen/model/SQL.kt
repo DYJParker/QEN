@@ -1,15 +1,12 @@
 package tech.jpco.qen.model
 
-import android.annotation.SuppressLint
 import android.content.Context
 import com.squareup.sqldelight.EnumColumnAdapter
 import com.squareup.sqldelight.android.AndroidSqliteDriver
 import com.squareup.sqldelight.runtime.rx.asObservable
-import com.squareup.sqldelight.runtime.rx.mapToOneNonNull
 import io.reactivex.Observable
 import io.reactivex.Single
 import tech.jpco.qen.Database
-import tech.jpco.qen.iLogger
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
 
@@ -63,7 +60,14 @@ class SQL private constructor(ctx: Context) : PagesRepository {
 
     private val mapper = { x: Float, y: Float, type: TouchEventType -> DrawPoint(x, y, type) }
 
-    @SuppressLint("CheckResult")
+    override fun addTouchStream(
+        inStream: Observable<DrawPoint>,
+        pageStream: Observable<Int>
+    ): Observable<List<Observable<DrawPoint>>> {
+        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+    }
+
+    /*    @SuppressLint("CheckResult")
     override fun addTouchStream(inStream: Observable<DrawPoint>, pageStream: Observable<Int>): Observable<DrawPoint> {
         pageStream
             .switchMap { currentPage: Int ->
@@ -82,5 +86,5 @@ class SQL private constructor(ctx: Context) : PagesRepository {
                 .mapToOneNonNull()
                 .doOnNext { iLogger("SQL touch output from page $currentPage", it) }
         }
-    }
+    }*/
 }

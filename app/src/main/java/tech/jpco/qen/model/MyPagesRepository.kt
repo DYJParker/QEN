@@ -10,7 +10,11 @@ class MyPagesRepository private constructor(ctx: Context) : PagesRepository by F
 }
 
 interface PagesRepository {
-    fun addTouchStream(inStream: Observable<DrawPoint>, pageStream: Observable<Int>): Observable<DrawPoint>
+    fun addTouchStream(
+        inStream: Observable<DrawPoint>,
+        pageStream: Observable<Int>
+    ): Observable<List<Observable<DrawPoint>>>
+
     fun clearPage(page: Int)
 
     val mostRecentPage: Int

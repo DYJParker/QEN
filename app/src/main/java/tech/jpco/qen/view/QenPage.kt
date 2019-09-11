@@ -13,9 +13,12 @@ import androidx.core.content.res.ResourcesCompat
 import com.jakewharton.rxbinding3.view.layoutChanges
 import com.jakewharton.rxbinding3.view.touches
 import io.reactivex.Observable
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.Disposable
 import tech.jpco.qen.R
 import tech.jpco.qen.TAG
 import tech.jpco.qen.iLogger
+import tech.jpco.qen.log
 import tech.jpco.qen.viewModel.DrawPoint
 import tech.jpco.qen.viewModel.TouchEventType
 import java.util.concurrent.TimeUnit
@@ -71,8 +74,8 @@ class QenPage @JvmOverloads constructor(
 
     val arStream: Observable<Float> = layoutChanges().map { ar }
 
-    fun drawSegment(new: DrawPoint, shouldInvalidate: Boolean = true) {
-        val (denormX, denormY) = denormalize(new.x, new.y)
+    fun oldDrawSegment(new: DrawPoint, shouldInvalidate: Boolean = true) {
+        val (denormX, denormY) = oldDenormalize(new.x, new.y)
         val denormNew = new.copy(x = denormX, y = denormY)
         if (lastPoint != null && denormNew.type != TouchEventType.TouchDown) {
             lastPoint?.apply {
@@ -83,6 +86,24 @@ class QenPage @JvmOverloads constructor(
         lastPoint = if (denormNew.type == TouchEventType.TouchUp) null else denormNew
     }
 
+    fun observeTouchStream(touchStream: Observable<DrawPoint>): Disposable =
+        touchStream
+            .scan(Pair<DrawPoint?, DrawPoint>(null, DrawPoint(Float.NaN, Float.NaN))) { pair, new ->
+                val denormNew = new.denormalize()
+                if (pair.second.x.isNaN() || new.type == TouchEventType.TouchDown)
+                    return@scan null to denormNew
+                pair.second to denormNew
+            }
+            .log("paired touchstream", this)
+            .filter { it.first != null }
+            .map { it as Pair<DrawPoint, DrawPoint> }
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe {
+                iLogger("drawing ${it.second}")
+                it.apply { bufferCanvas.drawLine(first.x, first.y, second.x, second.y, paint) }
+                invalidate()
+            }
+
     fun clearPage() {
         iLogger("clearPage called")
         bufferBitmap.eraseColor(Color.TRANSPARENT)
@@ -91,7 +112,7 @@ class QenPage @JvmOverloads constructor(
 
     fun drawPage(list: List<DrawPoint>, newAR: Float) {
         clearPage()
-        list.forEach { drawSegment(it, false) }
+        list.forEach { oldDrawSegment(it, false) }
         invalidate()
     }
 
@@ -105,9 +126,11 @@ class QenPage @JvmOverloads constructor(
         pixels / (sqrt((height * height + width * width).toDouble()))
 
     //comment-detritus from aborted aspect-ratio implementation
-    private fun denormalize(relX: Float, relY: Float) =
+    private fun oldDenormalize(relX: Float, relY: Float) =
         /*if (aspectRatio < 1)*/ Pair(relX * width, relY * height)
     /*else Pair(relY * mHeight, relX * mWidth)*/
+
+    private fun DrawPoint.denormalize() = copy(x = x * width, y = y * height)
 
     private fun Observable<MotionEvent>.filterForActionAndTime(minMilli: Long): Observable<MotionEvent> =
         publish { multiStream ->
@@ -126,9 +149,6 @@ class QenPage @JvmOverloads constructor(
             )
         }
 
-
-    //scan() emits Pair(the last valid point, the new point IFF it's valid)
-    //what's better, .filter().map() or .flatmap() using Observable.empty() and Observable.just(it)?
     private fun Observable<DrawPoint>.filterForMinDistance(tooClose: (Float, Float) -> Boolean): Observable<DrawPoint> =
         scan(DrawPoint(Float.NaN, Float.NaN)) { previousValid: DrawPoint, incoming: DrawPoint ->
             if (incoming.type == TouchEventType.TouchMove) {
@@ -144,5 +164,7 @@ class QenPage @JvmOverloads constructor(
 
             }
             incoming
-        }.distinctUntilChanged()
+        }
+            .filter { !it.x.isNaN() }
+            .distinctUntilChanged()
 }
