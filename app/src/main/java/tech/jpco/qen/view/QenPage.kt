@@ -92,10 +92,9 @@ class QenPage @JvmOverloads constructor(
     ): Disposable =
         touchStream
             .scan(Pair<DrawPoint?, DrawPoint>(null, DrawPoint(Float.NaN, Float.NaN))) { pair, new ->
-                val denormNew = new.denormalize()
                 if (pair.second.x.isNaN() || new.type == TouchEventType.TouchDown)
-                    return@scan null to denormNew
-                pair.second to denormNew
+                    return@scan null to new
+                pair.second to new
             }
             .log("paired touchstream", this)
             .filter { it.first != null }
@@ -104,7 +103,7 @@ class QenPage @JvmOverloads constructor(
             .run { if (!invalidateImmediately) doOnComplete { invalidate() } else this }
             .subscribe {
                 iLogger("drawing ${it.second}")
-                it.apply { bufferCanvas.drawLine(first.x, first.y, second.x, second.y, paint) }
+                it.drawLine()
                 if (invalidateImmediately) invalidate()
             }
 
@@ -115,11 +114,19 @@ class QenPage @JvmOverloads constructor(
     }
 
     fun drawPage(list: List<List<DrawPoint>>, newAR: Float) {
-        clearPage()
-        list.forEach {
-            observeTouchStream(Observable.fromIterable(it), false)
+        list.forEach { userList ->
+            userList.zipWithNext().forEach {
+                if (it.first.type != TouchEventType.TouchUp) it.drawLine()
+            }
         }
+        iLogger("---- invalidating")
+        invalidate()
     }
+
+    private fun Pair<DrawPoint, DrawPoint>.drawLine() =
+        (first.denormalize() to second.denormalize()).run {
+            bufferCanvas.drawLine(first.x, first.y, second.x, second.y, paint)
+        }
 
     //comment-detritus from aborted aspect-ratio implementation
     private fun normalize(x: Float, y: Float): Pair<Float, Float> =
