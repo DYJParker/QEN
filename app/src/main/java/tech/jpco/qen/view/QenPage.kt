@@ -22,6 +22,7 @@ import tech.jpco.qen.viewModel.TouchEventType
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.sqrt
+import kotlin.properties.Delegates
 
 class QenPage @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
@@ -33,6 +34,7 @@ class QenPage @JvmOverloads constructor(
     private val hypoteneuse
         get() = sqrt((height * height + width * width).toDouble())
             .also { if (it == 0.0) iLogger("hypoteneuse was zero!") }
+    private var minTouchDistance: Float by Delegates.notNull()
 
     override fun onDraw(canvas: Canvas?) {
         super.onDraw(canvas)
@@ -43,6 +45,7 @@ class QenPage @JvmOverloads constructor(
         Log.d(TAG, "onSizeChanged called")
         ar = w.toFloat() / h
         paint.strokeWidth = (hypoteneuse / 300).toFloat()
+        minTouchDistance = (15 /*px*/ / hypoteneuse).toFloat()
         //TODO make this resilient/persistent
         bufferBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bufferCanvas = Canvas(bufferBitmap)
@@ -50,26 +53,22 @@ class QenPage @JvmOverloads constructor(
     }
 
 
-    val touchStream: Observable<DrawPoint>
-        get() {
-            val normalizedDistance = normDistance(15)
-            return touches()
-                .filterForActionAndTime(33)
-                .map {
-                    val (normX, normY) = normalize(it.x, it.y)
-                    val type = when (it.action) {
-                        MotionEvent.ACTION_DOWN -> TouchEventType.TouchDown
-                        MotionEvent.ACTION_UP -> TouchEventType.TouchUp
-                        MotionEvent.ACTION_MOVE -> TouchEventType.TouchMove
-                        else -> throw IllegalArgumentException(
-                            "Tried to turn a MotionEvent other than Down, Up, or " +
-                                    "Move into a DrawPoint!"
-                        )
-                    }
-                    DrawPoint(normX, normY, type)
-                }
-                .filterForMinDistance { x, y -> abs(x) + abs(y) < normalizedDistance }
+    val touchStream: Observable<DrawPoint> = touches()
+        .filterForActionAndTime(33)
+        .map {
+            val (normX, normY) = normalize(it.x, it.y)
+            val type = when (it.action) {
+                MotionEvent.ACTION_DOWN -> TouchEventType.TouchDown
+                MotionEvent.ACTION_UP -> TouchEventType.TouchUp
+                MotionEvent.ACTION_MOVE -> TouchEventType.TouchMove
+                else -> throw IllegalArgumentException(
+                    "Tried to turn a MotionEvent other than Down, Up, or " +
+                            "Move into a DrawPoint!"
+                )
+            }
+            DrawPoint(normX, normY, type)
         }
+        .filterForMinDistance { x, y -> abs(x) + abs(y) < minTouchDistance }
 
     val arStream: Observable<Float> = layoutChanges().map { ar }
 

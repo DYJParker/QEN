@@ -127,6 +127,7 @@ object Firebase : PagesRepository {
 
         return multiPageStream
             .switchMap { currentPage ->
+                //TODO correct for multiple subscriptions on ClearPage. Convert to an observeChildEvent().scan()?
                 RxFirebaseDatabase.observeValueEvent(pages.child("$currentPage/$uids"))
                     .toObservable()
                     .observeOn(Schedulers.io())
