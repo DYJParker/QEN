@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">QEN</string>
+    <string name="clear_page">Clear Page</string>
+    <string name="cycle_page">Cycle Page</string>
+    <string name="new_page">New Page</string>
+    <string name="erase">Erase</string>
+    <string name="write">Write</string>
+</resources>
